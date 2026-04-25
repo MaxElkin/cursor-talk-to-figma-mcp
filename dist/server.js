@@ -3,6 +3,8 @@
 // src/talk_to_figma_mcp/server.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { z } from "zod";
 import WebSocket from "ws";
 import { v4 as uuidv4 } from "uuid";
@@ -706,6 +708,51 @@ server.tool(
           {
             type: "text",
             text: `Error exporting node as image: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
+  "save_node_as_image",
+  "Export a node as an image from Figma and save it to a local file path",
+  {
+    nodeId: z.string().describe("The ID of the node to export"),
+    path: z.string().describe("Absolute or relative filesystem path to save the exported file"),
+    format: z.enum(["PNG", "JPG", "SVG", "PDF"]).optional().describe("Export format"),
+    scale: z.number().positive().optional().describe("Export scale")
+  },
+  async ({ nodeId, path, format, scale }) => {
+    try {
+      const result = await sendCommandToFigma("export_node_as_image", {
+        nodeId,
+        format: format || "PNG",
+        scale: scale || 1
+      });
+      const typedResult = result;
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, Buffer.from(typedResult.imageData, "base64"));
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              nodeId: typedResult.nodeId,
+              format: typedResult.format,
+              scale: typedResult.scale,
+              mimeType: typedResult.mimeType || "image/png",
+              savedTo: path
+            })
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error saving node as image: ${error instanceof Error ? error.message : String(error)}`
           }
         ]
       };
