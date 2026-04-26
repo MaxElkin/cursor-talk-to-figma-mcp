@@ -177,7 +177,14 @@
       .header {
         display: flex;
         align-items: center;
+        justify-content: space-between;
         margin-bottom: 16px;
+      }
+
+      .header-main {
+        display: flex;
+        align-items: center;
+        min-width: 0;
       }
 
       .header-text {
@@ -243,6 +250,45 @@
         height: 24px;
         object-fit: contain;
       }
+
+      .header-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .icon-button {
+        width: 32px;
+        height: 32px;
+        min-width: 32px;
+        padding: 0;
+        margin: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background-color: #333333;
+        color: #e0e0e0;
+        border-radius: 8px;
+        font-size: 16px;
+        line-height: 1;
+      }
+
+      .icon-button:hover {
+        background-color: #454545;
+      }
+
+      body.collapsed {
+        padding: 12px 16px;
+      }
+
+      body.collapsed .tabs,
+      body.collapsed .tab-content {
+        display: none !important;
+      }
+
+      body.collapsed .header {
+        margin-bottom: 0;
+      }
       /* Progress styles */
       .operation-complete {
         color: #4ade80;
@@ -256,9 +302,16 @@
   <body>
     <div class="container">
       <div class="header">
-        <div class="header-text">
-          <h1>Talk To Figma MCP Plugin</h1>
-          <p>Connect Figma to Cursor AI using MCP</p>
+        <div class="header-main">
+          <div class="header-text">
+            <h1>Talk To Figma MCP Plugin</h1>
+            <p>Connect Figma to Cursor AI using MCP</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button id="btn-collapse" class="icon-button secondary" title="Collapse">
+            −
+          </button>
         </div>
       </div>
 
@@ -385,12 +438,14 @@
         serverPort: 3055,
         pendingRequests: new Map(),
         channel: null,
+        collapsed: false,
       };
 
       // UI Elements
       const portInput = document.getElementById("port");
       const connectButton = document.getElementById("btn-connect");
       const connectionStatus = document.getElementById("connection-status");
+      const collapseButton = document.getElementById("btn-collapse");
 
       // Tabs
       const tabs = document.querySelectorAll(".tab");
@@ -698,6 +753,27 @@
           connectionStatus.className = "status info";
           connectToServer(port);
         }
+      });
+
+      function updateCollapsedUI() {
+        document.body.classList.toggle("collapsed", state.collapsed);
+        collapseButton.textContent = state.collapsed ? "+" : "−";
+        collapseButton.title = state.collapsed ? "Expand" : "Collapse";
+
+        parent.postMessage(
+          {
+            pluginMessage: {
+              type: "toggle-collapse",
+              collapsed: state.collapsed,
+            },
+          },
+          "*"
+        );
+      }
+
+      collapseButton.addEventListener("click", () => {
+        state.collapsed = !state.collapsed;
+        updateCollapsedUI();
       });
 
       // Function to update progress UI

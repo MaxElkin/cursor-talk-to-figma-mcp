@@ -163,6 +163,35 @@ server.tool(
     }
   }
 );
+server.tool(
+  "get_node_summary",
+  "Get shallow information about a specific node in Figma without returning its children tree",
+  {
+    nodeId: import_zod.z.string().describe("The ID of the node to get summary information about")
+  },
+  async ({ nodeId }) => {
+    try {
+      const result = await sendCommandToFigma("get_node_summary", { nodeId });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(filterFigmaNode(result))
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error getting node summary: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
 function rgbaToHex(color) {
   if (color.startsWith("#")) {
     return color;
@@ -542,6 +571,55 @@ server.tool(
   }
 );
 server.tool(
+  "set_effects",
+  "Set the effects array of a node in Figma. Currently supports DROP_SHADOW effects.",
+  {
+    nodeId: import_zod.z.string().describe("The ID of the node to modify"),
+    effects: import_zod.z.array(
+      import_zod.z.object({
+        type: import_zod.z.literal("DROP_SHADOW").describe("Effect type"),
+        visible: import_zod.z.boolean().optional().describe("Whether the effect is visible"),
+        blendMode: import_zod.z.string().optional().describe("Blend mode, for example NORMAL"),
+        color: import_zod.z.object({
+          r: import_zod.z.number().min(0).max(1).describe("Red component (0-1)"),
+          g: import_zod.z.number().min(0).max(1).describe("Green component (0-1)"),
+          b: import_zod.z.number().min(0).max(1).describe("Blue component (0-1)"),
+          a: import_zod.z.number().min(0).max(1).optional().describe("Alpha component (0-1)")
+        }).describe("Effect color"),
+        offset: import_zod.z.object({
+          x: import_zod.z.number().describe("Horizontal offset"),
+          y: import_zod.z.number().describe("Vertical offset")
+        }).describe("Effect offset"),
+        radius: import_zod.z.number().min(0).describe("Blur radius"),
+        spread: import_zod.z.number().min(0).optional().describe("Shadow spread")
+      })
+    ).describe("Effects to apply. Replaces the full effects array.")
+  },
+  async ({ nodeId, effects }) => {
+    try {
+      const result = await sendCommandToFigma("set_effects", { nodeId, effects });
+      const typedResult = result;
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Set ${effects.length} effect(s) on node "${typedResult.name}"`
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error setting effects: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
   "move_node",
   "Move a node to a new position in Figma",
   {
@@ -599,6 +677,44 @@ server.tool(
           {
             type: "text",
             text: `Error cloning node: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
+  "create_variant",
+  "Create a new variant from an existing component. If the source component is already inside a component set, the variant is added there. If the source is a standalone component, a new component set is created from the source and the new variant.",
+  {
+    sourceNodeId: import_zod.z.string().describe("The ID of the source COMPONENT to clone"),
+    name: import_zod.z.string().describe("The full name for the new variant, for example 'Property 1=Hidden'"),
+    x: import_zod.z.number().optional().describe("Optional X position for the new variant"),
+    y: import_zod.z.number().optional().describe("Optional Y position for the new variant")
+  },
+  async ({ sourceNodeId, name, x, y }) => {
+    try {
+      const result = await sendCommandToFigma("create_variant", {
+        sourceNodeId,
+        name,
+        x,
+        y
+      });
+      const typedResult = result;
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Created variant "${typedResult.name}" with new ID: ${typedResult.id}${typedResult.x !== void 0 && typedResult.y !== void 0 ? ` at position (${typedResult.x}, ${typedResult.y})` : ""}`
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error creating variant: ${error instanceof Error ? error.message : String(error)}`
           }
         ]
       };
@@ -816,6 +932,64 @@ server.tool(
   }
 );
 server.tool(
+  "get_node_info_full",
+  "Get summary information for a specific node in Figma and all of its descendants using the get_node_summary shape recursively",
+  {
+    nodeId: import_zod.z.string().describe("The ID of the node to get the full recursive summary tree for")
+  },
+  async ({ nodeId }) => {
+    try {
+      const result = await sendCommandToFigma("get_node_info_full", { nodeId });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error getting node full info: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
+  "get_node_children_tree",
+  "Get only the recursive children tree for a specific node in Figma with id, name, type, and children",
+  {
+    nodeId: import_zod.z.string().describe("The ID of the node to get the recursive children tree for")
+  },
+  async ({ nodeId }) => {
+    try {
+      const result = await sendCommandToFigma("get_node_children_tree", { nodeId });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error getting node children tree: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
   "get_styles",
   "Get all styles from the current Figma document",
   {},
@@ -863,6 +1037,33 @@ server.tool(
           {
             type: "text",
             text: `Error getting local components: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
+  "list_anchor_nodes",
+  "List major anchor nodes from the Components, Screens/Phone, and Screens/Desktop sections",
+  {},
+  async () => {
+    try {
+      const result = await sendCommandToFigma("list_anchor_nodes");
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error listing anchor nodes: ${error instanceof Error ? error.message : String(error)}`
           }
         ]
       };
@@ -1023,6 +1224,35 @@ ${failedResults.map(
   }
 );
 server.tool(
+  "find_icon_resources",
+  "Find concrete icon resources used by a node by traversing its structure inside Figma",
+  {
+    nodeId: import_zod.z.string().optional().describe("Optional node ID to inspect. If omitted, the currently selected node is used.")
+  },
+  async ({ nodeId }) => {
+    try {
+      const result = await sendCommandToFigma("find_icon_resources", { nodeId });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error finding icon resources: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
   "create_component_instance",
   "Create an instance of a component in Figma. For LOCAL components (from get_local_components), use componentId with the id field. For published LIBRARY components, use componentKey with the publishedKey field.",
   {
@@ -1078,7 +1308,15 @@ server.tool(
         content: [
           {
             type: "text",
-            text: typedResult.success ? `Successfully got instance overrides: ${typedResult.message}` : `Failed to get instance overrides: ${typedResult.message}`
+            text: typedResult.success ? `Successfully got instance overrides: ${typedResult.message}
+${JSON.stringify({
+              sourceInstanceId: typedResult.sourceInstanceId,
+              mainComponentId: typedResult.mainComponentId,
+              mainComponentName: typedResult.mainComponentName,
+              overridesCount: typedResult.overridesCount,
+              overrides: typedResult.overrides || [],
+              componentProperties: typedResult.componentProperties || {}
+            }, null, 2)}` : `Failed to get instance overrides: ${typedResult.message}`
           }
         ]
       };
@@ -2185,6 +2423,40 @@ server.tool(
           {
             type: "text",
             text: `Error setting selections: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
+  "set_node_visibility",
+  "Set the visibility of a node in Figma",
+  {
+    nodeId: import_zod.z.string().describe("The ID of the node to modify"),
+    visible: import_zod.z.boolean().describe("Whether the node should be visible")
+  },
+  async ({ nodeId, visible }) => {
+    try {
+      const result = await sendCommandToFigma("set_node_visibility", {
+        nodeId,
+        visible
+      });
+      const typedResult = result;
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Set visibility of "${typedResult.name}" to ${typedResult.visible}`
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error setting node visibility: ${error instanceof Error ? error.message : String(error)}`
           }
         ]
       };

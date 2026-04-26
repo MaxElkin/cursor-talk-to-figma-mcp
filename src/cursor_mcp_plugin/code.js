@@ -6,6 +6,9 @@ const state = {
   serverPort: 3055, // Default port
 };
 
+const UI_EXPANDED_SIZE = { width: 350, height: 600 };
+const UI_COLLAPSED_SIZE = { width: 350, height: 72 };
+
 
 // Helper function for progress updates
 async function sendProgressUpdate(
@@ -55,7 +58,7 @@ async function sendProgressUpdate(
 }
 
 // Show UI
-figma.showUI(__html__, { width: 350, height: 600 });
+figma.showUI(__html__, UI_EXPANDED_SIZE);
 
 // Plugin commands from UI
 figma.ui.onmessage = async (msg) => {
@@ -68,6 +71,12 @@ figma.ui.onmessage = async (msg) => {
       break;
     case "close-plugin":
       figma.closePlugin();
+      break;
+    case "toggle-collapse":
+      figma.ui.resize(
+        msg.collapsed ? UI_COLLAPSED_SIZE.width : UI_EXPANDED_SIZE.width,
+        msg.collapsed ? UI_COLLAPSED_SIZE.height : UI_EXPANDED_SIZE.height
+      );
       break;
     case "execute-command":
       // Execute commands received from UI (which gets them from WebSocket)
@@ -118,6 +127,21 @@ async function handleCommand(command, params) {
         throw new Error("Missing nodeId parameter");
       }
       return await getNodeInfo(params.nodeId);
+    case "get_node_summary":
+      if (!params || !params.nodeId) {
+        throw new Error("Missing nodeId parameter");
+      }
+      return await getNodeSummary(params.nodeId);
+    case "get_node_children_tree":
+      if (!params || !params.nodeId) {
+        throw new Error("Missing nodeId parameter");
+      }
+      return await getNodeChildrenTree(params.nodeId);
+    case "get_node_info_full":
+      if (!params || !params.nodeId) {
+        throw new Error("Missing nodeId parameter");
+      }
+      return await getNodeInfoFull(params.nodeId);
     case "get_nodes_info":
       if (!params || !params.nodeIds || !Array.isArray(params.nodeIds)) {
         throw new Error("Missing or invalid nodeIds parameter");
@@ -135,6 +159,8 @@ async function handleCommand(command, params) {
       return await setFillColor(params);
     case "set_stroke_color":
       return await setStrokeColor(params);
+    case "set_effects":
+      return await setEffects(params);
     case "move_node":
       return await moveNode(params);
     case "resize_node":
@@ -147,6 +173,10 @@ async function handleCommand(command, params) {
       return await getStyles();
     case "get_local_components":
       return await getLocalComponents(params);
+    case "list_anchor_nodes":
+      return await listAnchorNodes();
+    case "find_icon_resources":
+      return await findIconResources(params);
     // case "get_team_components":
     //   return await getTeamComponents();
     case "create_component_instance":
@@ -159,6 +189,8 @@ async function handleCommand(command, params) {
       return await setTextContent(params);
     case "clone_node":
       return await cloneNode(params);
+    case "create_variant":
+      return await createVariant(params);
     case "scan_text_nodes":
       return await scanTextNodes(params);
     case "set_multiple_text_contents":
@@ -237,6 +269,8 @@ async function handleCommand(command, params) {
       return await setFocus(params);
     case "set_selections":
       return await setSelections(params);
+    case "set_node_visibility":
+      return await setNodeVisibility(params);
     default:
       throw new Error(`Unknown command: ${command}`);
   }
@@ -283,6 +317,62 @@ async function getSelection() {
   };
 }
 
+async function listAnchorNodes() {
+  await figma.currentPage.loadAsync();
+
+  const allowedSectionNames = new Set([
+    "Components",
+    "Screens/Phone",
+    "Screens/Desktop",
+  ]);
+
+  const anchorPrefixes = ["Component/", "Screen/"];
+  const allowedNodeTypes = new Set(["COMPONENT", "COMPONENT_SET"]);
+  const sections = figma.currentPage.children.filter((node) => {
+    return node.type === "SECTION" && allowedSectionNames.has(node.name);
+  });
+
+  const entries = [];
+
+  for (const section of sections) {
+    const nodes = section.findAll((node) => {
+      if (!node || typeof node.name !== "string") {
+        return false;
+      }
+
+      return (
+        allowedNodeTypes.has(node.type) &&
+        anchorPrefixes.some((prefix) => node.name.startsWith(prefix))
+      );
+    });
+
+    for (const node of nodes) {
+      entries.push({
+        id: node.id,
+        name: node.name,
+        type: node.type,
+        sectionName: section.name,
+      });
+    }
+  }
+
+  entries.sort((a, b) => {
+    if (a.sectionName !== b.sectionName) {
+      return a.sectionName.localeCompare(b.sectionName);
+    }
+    if (a.name !== b.name) {
+      return a.name.localeCompare(b.name);
+    }
+    return a.id.localeCompare(b.id);
+  });
+
+  return {
+    count: entries.length,
+    sectionsScanned: Array.from(allowedSectionNames),
+    nodes: entries,
+  };
+}
+
 function rgbaToHex(color) {
   var r = Math.round(color.r * 255);
   var g = Math.round(color.g * 255);
@@ -324,7 +414,6 @@ function filterFigmaNode(node) {
   if (node.fills && node.fills.length > 0) {
     filtered.fills = node.fills.map((fill) => {
       var processedFill = Object.assign({}, fill);
-      delete processedFill.boundVariables;
       delete processedFill.imageRef;
 
       if (processedFill.gradientStops) {
@@ -334,7 +423,6 @@ function filterFigmaNode(node) {
             if (processedStop.color) {
               processedStop.color = rgbaToHex(processedStop.color);
             }
-            delete processedStop.boundVariables;
             return processedStop;
           }
         );
@@ -351,7 +439,6 @@ function filterFigmaNode(node) {
   if (node.strokes && node.strokes.length > 0) {
     filtered.strokes = node.strokes.map((stroke) => {
       var processedStroke = Object.assign({}, stroke);
-      delete processedStroke.boundVariables;
       if (processedStroke.color) {
         processedStroke.color = rgbaToHex(processedStroke.color);
       }
@@ -396,6 +483,22 @@ function filterFigmaNode(node) {
   return filtered;
 }
 
+function processFigmaEffects(effects) {
+  if (!effects || effects.length === 0) {
+    return undefined;
+  }
+
+  return effects.map((effect) => {
+    const processedEffect = Object.assign({}, effect);
+
+    if (processedEffect.color) {
+      processedEffect.color = rgbaToHex(processedEffect.color);
+    }
+
+    return processedEffect;
+  });
+}
+
 async function getNodeInfo(nodeId) {
   const node = await figma.getNodeByIdAsync(nodeId);
 
@@ -408,6 +511,138 @@ async function getNodeInfo(nodeId) {
   });
 
   return filterFigmaNode(response.document);
+}
+
+function applyNodeSummaryFields(summary, node) {
+  summary.visible = node.visible !== false;
+  summary.locked = !!node.locked;
+
+  if (node.parent) {
+    summary.parentId = node.parent.id;
+  }
+
+  if ("opacity" in node && node.opacity !== undefined) {
+    summary.opacity = node.opacity;
+  }
+
+  if ("blendMode" in node && node.blendMode !== undefined) {
+    summary.blendMode = node.blendMode;
+  }
+
+  if ("effectStyleId" in node && node.effectStyleId) {
+    summary.effectStyleId = node.effectStyleId;
+  }
+
+  if ("fillStyleId" in node && node.fillStyleId) {
+    summary.fillStyleId = node.fillStyleId;
+  }
+
+  if ("strokeStyleId" in node && node.strokeStyleId) {
+    summary.strokeStyleId = node.strokeStyleId;
+  }
+
+  if ("textStyleId" in node && node.textStyleId) {
+    summary.textStyleId = node.textStyleId;
+  }
+
+  if ("effects" in node) {
+    const effects = processFigmaEffects(node.effects);
+    if (effects) {
+      summary.effects = effects;
+    }
+  }
+
+  if ("constraints" in node && node.constraints) {
+    summary.constraints = node.constraints;
+  }
+
+  if ("layoutAlign" in node && node.layoutAlign !== undefined) {
+    summary.layoutAlign = node.layoutAlign;
+  }
+
+  if ("layoutGrow" in node && node.layoutGrow !== undefined) {
+    summary.layoutGrow = node.layoutGrow;
+  }
+
+  return summary;
+}
+
+async function getNodeSummary(nodeId) {
+  const node = await figma.getNodeByIdAsync(nodeId);
+
+  if (!node) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+
+  const response = await node.exportAsync({
+    format: "JSON_REST_V1",
+  });
+
+  const summary = filterFigmaNode(response.document);
+  delete summary.children;
+
+  return applyNodeSummaryFields(summary, node);
+}
+
+function makeJsonSafe(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function buildNodeInfoFullFromTree(summaryNode, liveNode) {
+  const full = applyNodeSummaryFields(summaryNode, liveNode);
+
+  if (
+    "children" in liveNode &&
+    Array.isArray(liveNode.children) &&
+    liveNode.children.length > 0 &&
+    Array.isArray(summaryNode.children)
+  ) {
+    full.children = summaryNode.children.map((childSummary, index) =>
+      buildNodeInfoFullFromTree(childSummary, liveNode.children[index])
+    );
+  }
+
+  return full;
+}
+
+function buildNodeChildrenTree(node) {
+  const tree = {
+    id: node.id,
+    name: node.name,
+    type: node.type,
+  };
+
+  if ("children" in node && Array.isArray(node.children) && node.children.length > 0) {
+    tree.children = node.children.map((child) => buildNodeChildrenTree(child));
+  }
+
+  return tree;
+}
+
+async function getNodeChildrenTree(nodeId) {
+  const node = await figma.getNodeByIdAsync(nodeId);
+
+  if (!node) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+
+  return buildNodeChildrenTree(node);
+}
+
+async function getNodeInfoFull(nodeId) {
+  const node = await figma.getNodeByIdAsync(nodeId);
+
+  if (!node) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+
+  const response = await node.exportAsync({
+    format: "JSON_REST_V1",
+  });
+
+  const summaryTree = filterFigmaNode(response.document);
+  const full = buildNodeInfoFullFromTree(summaryTree, node);
+  return makeJsonSafe(full);
 }
 
 async function getNodesInfo(nodeIds) {
@@ -1011,6 +1246,62 @@ async function setStrokeColor(params) {
   };
 }
 
+async function setEffects(params) {
+  const { nodeId, effects } = params || {};
+
+  if (!nodeId) {
+    throw new Error("Missing nodeId parameter");
+  }
+
+  if (!Array.isArray(effects)) {
+    throw new Error("Missing or invalid effects parameter");
+  }
+
+  const node = await figma.getNodeByIdAsync(nodeId);
+  if (!node) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+
+  if (!("effects" in node)) {
+    throw new Error(`Node does not support effects: ${nodeId}`);
+  }
+
+  const normalizedEffects = effects.map((effect) => {
+    if (!effect || effect.type !== "DROP_SHADOW") {
+      throw new Error(`Unsupported effect type: ${effect && effect.type ? effect.type : "unknown"}`);
+    }
+
+    const color = effect.color || {};
+    const offset = effect.offset || {};
+
+    return {
+      type: "DROP_SHADOW",
+      visible: effect.visible !== false,
+      blendMode: effect.blendMode || "NORMAL",
+      color: {
+        r: color.r !== undefined ? color.r : 0,
+        g: color.g !== undefined ? color.g : 0,
+        b: color.b !== undefined ? color.b : 0,
+        a: color.a !== undefined ? color.a : 1,
+      },
+      offset: {
+        x: offset.x !== undefined ? offset.x : 0,
+        y: offset.y !== undefined ? offset.y : 0,
+      },
+      radius: effect.radius !== undefined ? effect.radius : 0,
+      spread: effect.spread !== undefined ? effect.spread : 0,
+    };
+  });
+
+  node.effects = normalizedEffects;
+
+  return {
+    id: node.id,
+    name: node.name,
+    effects: normalizedEffects,
+  };
+}
+
 async function moveNode(params) {
   const { nodeId, x, y } = params || {};
 
@@ -1191,6 +1482,248 @@ async function getLocalComponents(params) {
   return {
     count: allComponents.length,
     components: allComponents,
+  };
+}
+
+async function findIconResources(params) {
+  const nodeId = params && params.nodeId;
+  let rootNode = null;
+
+  if (nodeId) {
+    rootNode = await figma.getNodeByIdAsync(nodeId);
+    if (!rootNode) {
+      throw new Error(`Node not found with ID: ${nodeId}`);
+    }
+  } else {
+    if (figma.currentPage.selection.length !== 1) {
+      throw new Error("Select exactly one node or provide nodeId");
+    }
+    rootNode = figma.currentPage.selection[0];
+  }
+
+  function isVisibleNode(node) {
+    return !!node && node.visible !== false;
+  }
+
+  function getVisibleChildren(node) {
+    if (!node || !("children" in node)) {
+      return [];
+    }
+    return node.children.filter(isVisibleNode);
+  }
+
+  function pathLabel(node, mode) {
+    const name = node.name || `Unnamed ${node.type}`;
+    return mode === "main" ? `[main:${name}]` : name;
+  }
+
+  function isIconBranchName(name) {
+    return /(icon|leading|trailing|navigation|nav|menu)/i.test(name || "");
+  }
+
+  function normalizeIconResourceName(name) {
+    if (!name) {
+      return null;
+    }
+    if (name.startsWith("Icons/")) {
+      return name;
+    }
+    if (/^[A-Za-z0-9_]+(?:_[0-9]+px)?$/.test(name)) {
+      return `Icons/${name}`;
+    }
+    return null;
+  }
+
+  function buildMatch(resourceName, sourceNode, leafNode, path, mainComponent, branchName) {
+    return {
+      resourceName,
+      sourceNodeId: sourceNode ? sourceNode.id : undefined,
+      sourceNodeName: sourceNode ? sourceNode.name : undefined,
+      sourceNodeType: sourceNode ? sourceNode.type : undefined,
+      leafNodeId: leafNode ? leafNode.id : undefined,
+      leafNodeName: leafNode ? leafNode.name : undefined,
+      mainComponentId: mainComponent ? mainComponent.id : undefined,
+      mainComponentName: mainComponent ? mainComponent.name : undefined,
+      branchName,
+      path,
+    };
+  }
+
+  function pushUniqueMatch(matches, seenKeys, match) {
+    const key = [
+      match.branchName || "",
+      match.leafNodeId || "",
+      match.mainComponentId || "",
+      match.resourceName || "",
+    ].join("|");
+    if (seenKeys.has(key)) {
+      return;
+    }
+    seenKeys.add(key);
+    matches.push(match);
+  }
+
+  function chooseEntryNode(node) {
+    const visibleChildren = getVisibleChildren(node);
+    const mainChildInstances = visibleChildren.filter(
+      (child) => child.type === "INSTANCE" || child.type === "COMPONENT"
+    );
+    return mainChildInstances.length === 1 ? mainChildInstances[0] : node;
+  }
+
+  function getAncestorInstanceSwapCandidates(instanceTrail) {
+    if (!Array.isArray(instanceTrail) || instanceTrail.length === 0) {
+      return [];
+    }
+
+    const candidates = [];
+    for (let i = instanceTrail.length - 1; i >= 0; i -= 1) {
+      const node = instanceTrail[i];
+      if (!node || !node.componentProperties) {
+        continue;
+      }
+
+      for (const key in node.componentProperties) {
+        const property = node.componentProperties[key];
+        if (
+          property &&
+          property.type === "INSTANCE_SWAP" &&
+          typeof property.value === "string" &&
+          property.value.length > 0
+        ) {
+          candidates.push({
+            ownerNode: node,
+            propertyKey: key,
+            componentId: property.value,
+          });
+        }
+      }
+    }
+
+    return candidates;
+  }
+
+  function findLeafIconInstances(node, path, branchName, matches, instanceTrail) {
+    if (!node || !isVisibleNode(node)) {
+      return;
+    }
+
+    const nextPath = [...path, pathLabel(node, "canvas")];
+    const children = getVisibleChildren(node);
+    const nextInstanceTrail = node.type === "INSTANCE" ? [...instanceTrail, node] : instanceTrail;
+
+    if (node.type === "INSTANCE" && node.name === "Icon") {
+      matches.push({
+        leafNode: node,
+        branchName,
+        path: nextPath,
+        instanceTrail: nextInstanceTrail,
+      });
+      return;
+    }
+
+    if (children.length === 0) {
+      return;
+    }
+
+    for (const child of children) {
+      findLeafIconInstances(child, nextPath, branchName, matches, nextInstanceTrail);
+    }
+  }
+
+  async function resolveBranchIconResources(branch, basePath, results, seenKeys) {
+    const leafMatches = [];
+    findLeafIconInstances(branch, basePath, branch.name || branch.id, leafMatches, []);
+
+    for (const leafMatch of leafMatches) {
+      const leafNode = leafMatch.leafNode;
+      const instanceSwapCandidates = getAncestorInstanceSwapCandidates(leafMatch.instanceTrail);
+
+      for (const candidate of instanceSwapCandidates) {
+        const swappedComponent = await figma.getNodeByIdAsync(candidate.componentId);
+        if (!swappedComponent || swappedComponent.type !== "COMPONENT") {
+          continue;
+        }
+
+        const swappedResourceName = normalizeIconResourceName(swappedComponent.name);
+        if (!swappedResourceName) {
+          continue;
+        }
+
+        pushUniqueMatch(
+          results,
+          seenKeys,
+          buildMatch(
+            swappedResourceName,
+            candidate.ownerNode,
+            leafNode,
+            [
+              ...leafMatch.path,
+              `[swap:${candidate.propertyKey}]`,
+              pathLabel(swappedComponent, "main"),
+            ],
+            swappedComponent,
+            leafMatch.branchName
+          )
+        );
+      }
+
+      const mainComponent = await leafNode.getMainComponentAsync();
+      if (!mainComponent) {
+        continue;
+      }
+
+      const resourceName = normalizeIconResourceName(mainComponent.name);
+      if (!resourceName) {
+        continue;
+      }
+
+      pushUniqueMatch(
+        results,
+        seenKeys,
+        buildMatch(
+          resourceName,
+          branch,
+          leafNode,
+          [...leafMatch.path, pathLabel(mainComponent, "main")],
+          mainComponent,
+          leafMatch.branchName
+        )
+      );
+    }
+  }
+
+  const entryNode = chooseEntryNode(rootNode);
+  const entryChildren = getVisibleChildren(entryNode);
+  const iconNamedBranches = entryChildren.filter((child) => isIconBranchName(child.name));
+  const branchCandidates = iconNamedBranches.length > 0 ? iconNamedBranches : entryChildren;
+  const branchSelectionStrategy =
+    iconNamedBranches.length > 0 ? "icon_named_visible_children" : "all_visible_children";
+
+  const results = [];
+  const seenMatches = new Set();
+  for (const branch of branchCandidates) {
+    const branchPath = [pathLabel(rootNode, "canvas")];
+    if (entryNode.id !== rootNode.id) {
+      branchPath.push(pathLabel(entryNode, "canvas"));
+    }
+    await resolveBranchIconResources(branch, branchPath, results, seenMatches);
+  }
+
+  return {
+    nodeId: rootNode.id,
+    nodeName: rootNode.name,
+    entryNodeId: entryNode.id,
+    entryNodeName: entryNode.name,
+    branchSelectionStrategy,
+    inspectedBranches: branchCandidates.map((branch) => ({
+      id: branch.id,
+      name: branch.name,
+      type: branch.type,
+    })),
+    count: results.length,
+    icons: results,
+    preferredIcon: results[0] || null,
   };
 }
 
@@ -1744,6 +2277,158 @@ async function cloneNode(params) {
     y: "y" in clone ? clone.y : undefined,
     width: "width" in clone ? clone.width : undefined,
     height: "height" in clone ? clone.height : undefined,
+  };
+}
+
+async function createVariant(params) {
+  const { sourceNodeId, name, x, y } = params || {};
+
+  if (!sourceNodeId) {
+    throw new Error("Missing sourceNodeId parameter");
+  }
+
+  if (!name || typeof name !== "string") {
+    throw new Error("Missing or invalid name parameter");
+  }
+
+  const sourceNode = await figma.getNodeByIdAsync(sourceNodeId);
+  if (!sourceNode) {
+    throw new Error(`Node not found with ID: ${sourceNodeId}`);
+  }
+
+  if (sourceNode.type !== "COMPONENT") {
+    throw new Error(
+      `Node ${sourceNodeId} is not a COMPONENT (got type: ${sourceNode.type})`
+    );
+  }
+
+  const sourceParent = sourceNode.parent;
+  if (!sourceParent || !("appendChild" in sourceParent)) {
+    throw new Error("Source component must have a writable parent");
+  }
+
+  let componentSetParent = null;
+  let componentSet = null;
+  let clone = null;
+
+  if (sourceParent.type === "COMPONENT_SET") {
+    componentSet = sourceParent;
+    clone = sourceNode.clone();
+    clone.name = name;
+    componentSet.appendChild(clone);
+    componentSetParent = componentSet.parent;
+  } else {
+    const sourceIndex = sourceParent.children.indexOf(sourceNode);
+    clone = sourceNode.clone();
+    clone.name = name;
+    sourceParent.appendChild(clone);
+    componentSet = figma.combineAsVariants([sourceNode, clone], sourceParent, sourceIndex);
+    componentSetParent = sourceParent;
+  }
+
+  const existingSiblings = componentSet.children.filter(
+    (child) => child.type === "COMPONENT"
+  );
+  const existingLeft = existingSiblings.reduce(
+    (minX, child) => Math.min(minX, child.x),
+    Number.POSITIVE_INFINITY
+  );
+  const existingTop = existingSiblings.reduce(
+    (minY, child) => Math.min(minY, child.y),
+    Number.POSITIVE_INFINITY
+  );
+  const existingRight = existingSiblings.reduce(
+    (maxRight, child) => Math.max(maxRight, child.x + child.width),
+    Number.NEGATIVE_INFINITY
+  );
+  const existingBottom = existingSiblings.reduce(
+    (maxBottom, child) => Math.max(maxBottom, child.y + child.height),
+    Number.NEGATIVE_INFINITY
+  );
+  const rightPadding =
+    Number.isFinite(existingRight) ? Math.max(0, componentSet.width - existingRight) : 0;
+  const bottomPadding =
+    Number.isFinite(existingBottom) ? Math.max(0, componentSet.height - existingBottom) : 0;
+
+  if (x !== undefined && y !== undefined) {
+    clone.x = x;
+    clone.y = y;
+  } else {
+    const siblingComponents = componentSet.children.filter(
+      (child) => child.id !== clone.id && child.type === "COMPONENT"
+    );
+
+    const lowestSibling = siblingComponents.reduce((lowest, child) => {
+      if (!lowest) {
+        return child;
+      }
+      return child.y + child.height > lowest.y + lowest.height
+        ? child
+        : lowest;
+    }, null);
+
+    if (lowestSibling) {
+      clone.x = lowestSibling.x;
+      clone.y = lowestSibling.y + lowestSibling.height + 20;
+    } else {
+      clone.x = Number.isFinite(existingLeft) ? existingLeft : sourceNode.x;
+      clone.y = Number.isFinite(existingTop) ? existingTop : sourceNode.y;
+    }
+  }
+
+  const allComponents = componentSet.children.filter((child) => child.type === "COMPONENT");
+  const requiredWidth = allComponents.reduce(
+    (maxRight, child) => Math.max(maxRight, child.x + child.width),
+    0
+  ) + rightPadding;
+  const requiredHeight = allComponents.reduce(
+    (maxBottom, child) => Math.max(maxBottom, child.y + child.height),
+    0
+  ) + bottomPadding;
+
+  componentSet.resizeWithoutConstraints(
+    Math.max(0.01, requiredWidth),
+    Math.max(0.01, requiredHeight)
+  );
+
+  return {
+    id: clone.id,
+    name: clone.name,
+    parentId: componentSet.id,
+    componentSetId: componentSet.id,
+    componentSetName: componentSet.name,
+    componentSetParentId: componentSetParent ? componentSetParent.id : undefined,
+    x: clone.x,
+    y: clone.y,
+    width: clone.width,
+    height: clone.height,
+  };
+}
+
+async function setNodeVisibility(params) {
+  const { nodeId, visible } = params || {};
+
+  if (!nodeId) {
+    throw new Error("Missing nodeId parameter");
+  }
+
+  if (typeof visible !== "boolean") {
+    throw new Error("Missing or invalid visible parameter");
+  }
+
+  const node = await figma.getNodeByIdAsync(nodeId);
+  if (!node) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+
+  node.visible = visible;
+
+  return {
+    id: node.id,
+    name: node.name,
+    type: node.type,
+    visible: node.visible,
+    message: `Set visibility of "${node.name}" to ${node.visible}`,
   };
 }
 
@@ -3071,6 +3756,8 @@ async function getInstanceOverrides(instanceNode = null) {
     // Get component overrides and main component
     const overrides = sourceInstance.overrides || [];
     console.log(`  Raw Overrides:`, overrides);
+    const componentProperties = sourceInstance.componentProperties || {};
+    console.log(`  Component Properties:`, componentProperties);
 
     // Get main component
     const mainComponent = await sourceInstance.getMainComponentAsync();
@@ -3086,7 +3773,10 @@ async function getInstanceOverrides(instanceNode = null) {
       message: `Got component information from "${sourceInstance.name}" for overrides.length: ${overrides.length}`,
       sourceInstanceId: sourceInstance.id,
       mainComponentId: mainComponent.id,
-      overridesCount: overrides.length
+      mainComponentName: mainComponent.name,
+      overridesCount: overrides.length,
+      overrides,
+      componentProperties
     };
 
     console.log("Data to return to MCP server:", returnData);
