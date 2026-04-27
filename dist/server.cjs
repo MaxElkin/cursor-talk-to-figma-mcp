@@ -165,18 +165,18 @@ server.tool(
 );
 server.tool(
   "get_node_summary",
-  "Get shallow information about a specific node in Figma without returning its children tree",
+  "Get shallow information about a specific node in Figma without returning its children tree. If nodeId is omitted, uses the single currently selected node.",
   {
-    nodeId: import_zod.z.string().describe("The ID of the node to get summary information about")
+    nodeId: import_zod.z.string().optional().describe("The ID of the node to get summary information about. If omitted, the single selected node is used.")
   },
   async ({ nodeId }) => {
     try {
-      const result = await sendCommandToFigma("get_node_summary", { nodeId });
+      const result = await sendCommandToFigma("get_node_summary", nodeId ? { nodeId } : {});
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(filterFigmaNode(result))
+            text: JSON.stringify(result)
           }
         ]
       };
@@ -214,7 +214,6 @@ function filterFigmaNode(node) {
   if (node.fills && node.fills.length > 0) {
     filtered.fills = node.fills.map((fill) => {
       const processedFill = { ...fill };
-      delete processedFill.boundVariables;
       delete processedFill.imageRef;
       if (processedFill.gradientStops) {
         processedFill.gradientStops = processedFill.gradientStops.map((stop) => {
@@ -222,7 +221,6 @@ function filterFigmaNode(node) {
           if (processedStop.color) {
             processedStop.color = rgbaToHex(processedStop.color);
           }
-          delete processedStop.boundVariables;
           return processedStop;
         });
       }
@@ -235,7 +233,6 @@ function filterFigmaNode(node) {
   if (node.strokes && node.strokes.length > 0) {
     filtered.strokes = node.strokes.map((stroke) => {
       const processedStroke = { ...stroke };
-      delete processedStroke.boundVariables;
       if (processedStroke.color) {
         processedStroke.color = rgbaToHex(processedStroke.color);
       }
@@ -261,6 +258,9 @@ function filterFigmaNode(node) {
       letterSpacing: node.style.letterSpacing,
       lineHeightPx: node.style.lineHeightPx
     };
+  }
+  if (node.boundVariables) {
+    filtered.boundVariables = node.boundVariables;
   }
   if (node.children) {
     filtered.children = node.children.map((child) => filterFigmaNode(child)).filter((child) => child !== null);
@@ -1246,6 +1246,65 @@ server.tool(
           {
             type: "text",
             text: `Error finding icon resources: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
+  "find_color_resources",
+  "Find color resources used by a node and all nested children, including variable bindings, style links, and hardcoded colors",
+  {
+    nodeId: import_zod.z.string().optional().describe("Optional node ID to inspect. If omitted, the currently selected node is used.")
+  },
+  async ({ nodeId }) => {
+    try {
+      const result = await sendCommandToFigma("find_color_resources", nodeId ? { nodeId } : {});
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error finding color resources: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
+  "get_node_blocks",
+  "Get selected blocks of node information for a specific node or the single selected node. Block numbers: 1=node metadata, 2=color styles and variables, 3=text content/styles/color resources, 4=layout data, 5=geometry and shape, 6=effects and decoration, 7=child structure, 8=icon and image resources, 9=state and variants.",
+  {
+    nodeId: import_zod.z.string().optional().describe("Optional node ID to inspect. If omitted, the currently selected node is used."),
+    blocks: import_zod.z.array(import_zod.z.number().int()).describe("List of block numbers to return.")
+  },
+  async ({ nodeId, blocks }) => {
+    try {
+      const result = await sendCommandToFigma("get_node_blocks", nodeId ? { nodeId, blocks } : { blocks });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error getting node blocks: ${error instanceof Error ? error.message : String(error)}`
           }
         ]
       };

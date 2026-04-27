@@ -219,18 +219,18 @@ server.tool(
 // Node Summary Tool
 server.tool(
   "get_node_summary",
-  "Get shallow information about a specific node in Figma without returning its children tree",
+  "Get shallow information about a specific node in Figma without returning its children tree. If nodeId is omitted, uses the single currently selected node.",
   {
-    nodeId: z.string().describe("The ID of the node to get summary information about"),
+    nodeId: z.string().optional().describe("The ID of the node to get summary information about. If omitted, the single selected node is used."),
   },
   async ({ nodeId }: any) => {
     try {
-      const result = await sendCommandToFigma("get_node_summary", { nodeId });
+      const result = await sendCommandToFigma("get_node_summary", nodeId ? { nodeId } : {});
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(filterFigmaNode(result))
+            text: JSON.stringify(result)
           }
         ]
       };
@@ -278,8 +278,7 @@ function filterFigmaNode(node: any) {
     filtered.fills = node.fills.map((fill: any) => {
       const processedFill = { ...fill };
 
-      // Remove boundVariables and imageRef
-      delete processedFill.boundVariables;
+      // Remove imageRef
       delete processedFill.imageRef;
 
       // Process gradientStops if present
@@ -290,8 +289,6 @@ function filterFigmaNode(node: any) {
           if (processedStop.color) {
             processedStop.color = rgbaToHex(processedStop.color);
           }
-          // Remove boundVariables
-          delete processedStop.boundVariables;
           return processedStop;
         });
       }
@@ -308,8 +305,6 @@ function filterFigmaNode(node: any) {
   if (node.strokes && node.strokes.length > 0) {
     filtered.strokes = node.strokes.map((stroke: any) => {
       const processedStroke = { ...stroke };
-      // Remove boundVariables
-      delete processedStroke.boundVariables;
       // Convert color to hex if present
       if (processedStroke.color) {
         processedStroke.color = rgbaToHex(processedStroke.color);
@@ -340,6 +335,10 @@ function filterFigmaNode(node: any) {
       letterSpacing: node.style.letterSpacing,
       lineHeightPx: node.style.lineHeightPx
     };
+  }
+
+  if (node.boundVariables) {
+    filtered.boundVariables = node.boundVariables;
   }
 
   if (node.children) {
@@ -1499,6 +1498,67 @@ server.tool(
           {
             type: "text",
             text: `Error finding icon resources: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+server.tool(
+  "find_color_resources",
+  "Find color resources used by a node and all nested children, including variable bindings, style links, and hardcoded colors",
+  {
+    nodeId: z.string().optional().describe("Optional node ID to inspect. If omitted, the currently selected node is used."),
+  },
+  async ({ nodeId }: any) => {
+    try {
+      const result = await sendCommandToFigma("find_color_resources", nodeId ? { nodeId } : {});
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error finding color resources: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+server.tool(
+  "get_node_blocks",
+  "Get selected blocks of node information for a specific node or the single selected node. Block numbers: 1=node metadata, 2=color styles and variables, 3=text content/styles/color resources, 4=layout data, 5=geometry and shape, 6=effects and decoration, 7=child structure, 8=icon and image resources, 9=state and variants.",
+  {
+    nodeId: z.string().optional().describe("Optional node ID to inspect. If omitted, the currently selected node is used."),
+    blocks: z.array(z.number().int()).describe("List of block numbers to return."),
+  },
+  async ({ nodeId, blocks }: any) => {
+    try {
+      const result = await sendCommandToFigma("get_node_blocks", nodeId ? { nodeId, blocks } : { blocks });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error getting node blocks: ${error instanceof Error ? error.message : String(error)}`,
           },
         ],
       };
@@ -2989,6 +3049,8 @@ type FigmaCommand =
   | "get_local_components"
   | "list_anchor_nodes"
   | "find_icon_resources"
+  | "find_color_resources"
+  | "get_node_blocks"
   | "create_component_instance"
   | "get_instance_overrides"
   | "set_instance_overrides"
@@ -3020,7 +3082,7 @@ type CommandParams = {
   get_document_info: Record<string, never>;
   get_selection: Record<string, never>;
   get_node_info: { nodeId: string };
-  get_node_summary: { nodeId: string };
+  get_node_summary: { nodeId?: string };
   get_node_info_full: { nodeId: string };
   get_node_children_tree: { nodeId: string };
   get_nodes_info: { nodeIds: string[] };
@@ -3101,6 +3163,13 @@ type CommandParams = {
   list_anchor_nodes: Record<string, never>;
   find_icon_resources: {
     nodeId?: string;
+  };
+  find_color_resources: {
+    nodeId?: string;
+  };
+  get_node_blocks: {
+    nodeId?: string;
+    blocks: number[];
   };
   get_team_components: Record<string, never>;
   create_component_instance: {

@@ -128,10 +128,7 @@ async function handleCommand(command, params) {
       }
       return await getNodeInfo(params.nodeId);
     case "get_node_summary":
-      if (!params || !params.nodeId) {
-        throw new Error("Missing nodeId parameter");
-      }
-      return await getNodeSummary(params.nodeId);
+      return await getNodeSummary(params && params.nodeId ? params.nodeId : undefined);
     case "get_node_children_tree":
       if (!params || !params.nodeId) {
         throw new Error("Missing nodeId parameter");
@@ -177,6 +174,10 @@ async function handleCommand(command, params) {
       return await listAnchorNodes();
     case "find_icon_resources":
       return await findIconResources(params);
+    case "find_color_resources":
+      return await findColorResources(params);
+    case "get_node_blocks":
+      return await getNodeBlocks(params);
     // case "get_team_components":
     //   return await getTeamComponents();
     case "create_component_instance":
@@ -499,6 +500,68 @@ function processFigmaEffects(effects) {
   });
 }
 
+function mergePaintResourceData(summaryPaints, livePaints) {
+  if (!Array.isArray(summaryPaints) || !Array.isArray(livePaints)) {
+    return;
+  }
+
+  summaryPaints.forEach((summaryPaint, index) => {
+    const livePaint = livePaints[index];
+    if (!livePaint || typeof livePaint !== "object") {
+      return;
+    }
+
+    if (livePaint.boundVariables) {
+      summaryPaint.boundVariables = makeJsonSafe(livePaint.boundVariables);
+    }
+
+    if (
+      Array.isArray(summaryPaint.gradientStops) &&
+      Array.isArray(livePaint.gradientStops)
+    ) {
+      summaryPaint.gradientStops.forEach((summaryStop, stopIndex) => {
+        const liveStop = livePaint.gradientStops[stopIndex];
+        if (liveStop && liveStop.boundVariables) {
+          summaryStop.boundVariables = makeJsonSafe(liveStop.boundVariables);
+        }
+      });
+    }
+  });
+}
+
+async function enrichVariableAliasesInPlace(value, cache) {
+  if (Array.isArray(value)) {
+    await Promise.all(value.map((item) => enrichVariableAliasesInPlace(item, cache)));
+    return;
+  }
+
+  if (!value || typeof value !== "object") {
+    return;
+  }
+
+  if (value.type === "VARIABLE_ALIAS" && typeof value.id === "string") {
+    let variableName = cache.get(value.id);
+
+    if (variableName === undefined) {
+      const variable = await figma.variables.getVariableByIdAsync(value.id);
+      variableName = variable ? variable.name : null;
+      cache.set(value.id, variableName);
+    }
+
+    if (variableName) {
+      value.name = variableName;
+    }
+
+    return;
+  }
+
+  await Promise.all(
+    Object.values(value).map((nestedValue) =>
+      enrichVariableAliasesInPlace(nestedValue, cache)
+    )
+  );
+}
+
 async function getNodeInfo(nodeId) {
   const node = await figma.getNodeByIdAsync(nodeId);
 
@@ -529,6 +592,14 @@ function applyNodeSummaryFields(summary, node) {
     summary.blendMode = node.blendMode;
   }
 
+  if ("layoutMode" in node && node.layoutMode !== undefined) {
+    summary.layoutMode = node.layoutMode;
+  }
+
+  if ("layoutWrap" in node && node.layoutWrap !== undefined) {
+    summary.layoutWrap = node.layoutWrap;
+  }
+
   if ("effectStyleId" in node && node.effectStyleId) {
     summary.effectStyleId = node.effectStyleId;
   }
@@ -545,6 +616,14 @@ function applyNodeSummaryFields(summary, node) {
     summary.textStyleId = node.textStyleId;
   }
 
+  if ("fills" in node && node.fills !== figma.mixed) {
+    mergePaintResourceData(summary.fills, node.fills);
+  }
+
+  if ("strokes" in node && node.strokes !== figma.mixed) {
+    mergePaintResourceData(summary.strokes, node.strokes);
+  }
+
   if ("effects" in node) {
     const effects = processFigmaEffects(node.effects);
     if (effects) {
@@ -552,8 +631,24 @@ function applyNodeSummaryFields(summary, node) {
     }
   }
 
+  if ("strokeWeight" in node && node.strokeWeight !== undefined) {
+    summary.strokeWeight = node.strokeWeight;
+  }
+
+  if ("strokeAlign" in node && node.strokeAlign !== undefined) {
+    summary.strokeAlign = node.strokeAlign;
+  }
+
   if ("constraints" in node && node.constraints) {
     summary.constraints = node.constraints;
+  }
+
+  if ("primaryAxisAlignItems" in node && node.primaryAxisAlignItems !== undefined) {
+    summary.primaryAxisAlignItems = node.primaryAxisAlignItems;
+  }
+
+  if ("counterAxisAlignItems" in node && node.counterAxisAlignItems !== undefined) {
+    summary.counterAxisAlignItems = node.counterAxisAlignItems;
   }
 
   if ("layoutAlign" in node && node.layoutAlign !== undefined) {
@@ -564,16 +659,224 @@ function applyNodeSummaryFields(summary, node) {
     summary.layoutGrow = node.layoutGrow;
   }
 
+  if ("layoutSizingHorizontal" in node && node.layoutSizingHorizontal !== undefined) {
+    summary.layoutSizingHorizontal = node.layoutSizingHorizontal;
+  }
+
+  if ("layoutSizingVertical" in node && node.layoutSizingVertical !== undefined) {
+    summary.layoutSizingVertical = node.layoutSizingVertical;
+  }
+
+  if ("primaryAxisSizingMode" in node && node.primaryAxisSizingMode !== undefined) {
+    summary.primaryAxisSizingMode = node.primaryAxisSizingMode;
+  }
+
+  if ("counterAxisSizingMode" in node && node.counterAxisSizingMode !== undefined) {
+    summary.counterAxisSizingMode = node.counterAxisSizingMode;
+  }
+
+  if ("itemSpacing" in node && node.itemSpacing !== undefined) {
+    summary.itemSpacing = node.itemSpacing;
+  }
+
+  if ("paddingLeft" in node && node.paddingLeft !== undefined) {
+    summary.paddingLeft = node.paddingLeft;
+  }
+
+  if ("paddingRight" in node && node.paddingRight !== undefined) {
+    summary.paddingRight = node.paddingRight;
+  }
+
+  if ("paddingTop" in node && node.paddingTop !== undefined) {
+    summary.paddingTop = node.paddingTop;
+  }
+
+  if ("paddingBottom" in node && node.paddingBottom !== undefined) {
+    summary.paddingBottom = node.paddingBottom;
+  }
+
+  if ("clipsContent" in node && node.clipsContent !== undefined) {
+    summary.clipsContent = node.clipsContent;
+  }
+
+  if ("boundVariables" in node && node.boundVariables) {
+    summary.boundVariables = makeJsonSafe(node.boundVariables);
+  }
+
   return summary;
 }
 
-async function getNodeSummary(nodeId) {
-  const node = await figma.getNodeByIdAsync(nodeId);
+function makeJsonSafe(value) {
+  return JSON.parse(JSON.stringify(value));
+}
 
-  if (!node) {
-    throw new Error(`Node not found with ID: ${nodeId}`);
+function createSummaryContext() {
+  return {
+    variableCache: new Map(),
+    styleCache: new Map(),
+  };
+}
+
+async function resolveStyleInfo(styleId, styleCache) {
+  if (!styleId) {
+    return null;
   }
 
+  if (styleCache.has(styleId)) {
+    return styleCache.get(styleId);
+  }
+
+  const style = await figma.getStyleByIdAsync(styleId);
+  const styleInfo = style
+    ? {
+        id: style.id,
+        name: style.name,
+        key: "key" in style ? style.key : undefined,
+        remote: !!style.remote,
+      }
+    : null;
+
+  styleCache.set(styleId, styleInfo);
+  return styleInfo;
+}
+
+function collectVariableNames(value, names) {
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectVariableNames(item, names));
+    return;
+  }
+
+  if (!value || typeof value !== "object") {
+    return;
+  }
+
+  if (value.type === "VARIABLE_ALIAS" && typeof value.name === "string" && value.name.length > 0) {
+    names.add(value.name);
+    return;
+  }
+
+  Object.values(value).forEach((nestedValue) => collectVariableNames(nestedValue, names));
+}
+
+function addStyleName(names, styleInfo) {
+  if (styleInfo && typeof styleInfo.name === "string" && styleInfo.name.length > 0) {
+    names.add(styleInfo.name);
+  }
+}
+
+function buildResourceSummary(summaryNode) {
+  const colorKinds = new Set();
+  const variableNames = new Set();
+  const styleNames = new Set();
+
+  if (summaryNode.fillStyle) {
+    colorKinds.add("style");
+    addStyleName(styleNames, summaryNode.fillStyle);
+  }
+
+  if (summaryNode.strokeStyle) {
+    colorKinds.add("style");
+    addStyleName(styleNames, summaryNode.strokeStyle);
+  }
+
+  if (summaryNode.fills) {
+    summaryNode.fills.forEach((paint) => {
+      if (paint.color) {
+        colorKinds.add("hardcoded");
+      }
+
+      if (paint.boundVariables) {
+        colorKinds.add("variable");
+        collectVariableNames(paint.boundVariables, variableNames);
+      }
+
+      if (Array.isArray(paint.gradientStops)) {
+        paint.gradientStops.forEach((stop) => {
+          if (stop.color) {
+            colorKinds.add("hardcoded");
+          }
+
+          if (stop.boundVariables) {
+            colorKinds.add("variable");
+            collectVariableNames(stop.boundVariables, variableNames);
+          }
+        });
+      }
+    });
+  }
+
+  if (summaryNode.strokes) {
+    summaryNode.strokes.forEach((paint) => {
+      if (paint.color) {
+        colorKinds.add("hardcoded");
+      }
+
+      if (paint.boundVariables) {
+        colorKinds.add("variable");
+        collectVariableNames(paint.boundVariables, variableNames);
+      }
+    });
+  }
+
+  if (summaryNode.boundVariables) {
+    colorKinds.add("variable");
+    collectVariableNames(summaryNode.boundVariables, variableNames);
+  }
+
+  return {
+    colorKinds: Array.from(colorKinds),
+    variableNames: Array.from(variableNames),
+    styleNames: Array.from(styleNames),
+  };
+}
+
+async function enrichSummaryNode(summaryNode, liveNode, context) {
+  const enrichedNode = applyNodeSummaryFields(summaryNode, liveNode);
+  await enrichVariableAliasesInPlace(enrichedNode, context.variableCache);
+
+  if (enrichedNode.fillStyleId) {
+    enrichedNode.fillStyle = await resolveStyleInfo(enrichedNode.fillStyleId, context.styleCache);
+  }
+
+  if (enrichedNode.strokeStyleId) {
+    enrichedNode.strokeStyle = await resolveStyleInfo(enrichedNode.strokeStyleId, context.styleCache);
+  }
+
+  if (enrichedNode.effectStyleId) {
+    enrichedNode.effectStyle = await resolveStyleInfo(enrichedNode.effectStyleId, context.styleCache);
+  }
+
+  if (enrichedNode.textStyleId) {
+    enrichedNode.textStyle = await resolveStyleInfo(enrichedNode.textStyleId, context.styleCache);
+  }
+
+  if (liveNode.componentProperties) {
+    enrichedNode.componentProperties = makeJsonSafe(liveNode.componentProperties);
+  }
+
+  if (liveNode.type === "INSTANCE" && "getMainComponentAsync" in liveNode) {
+    const mainComponent = await liveNode.getMainComponentAsync();
+    if (mainComponent) {
+      enrichedNode.instanceInfo = {
+        mainComponentId: mainComponent.id,
+        mainComponentName: mainComponent.name,
+      };
+    }
+  }
+
+  const resourceSummary = buildResourceSummary(enrichedNode);
+  if (
+    resourceSummary.colorKinds.length > 0 ||
+    resourceSummary.variableNames.length > 0 ||
+    resourceSummary.styleNames.length > 0
+  ) {
+    enrichedNode.resourceSummary = resourceSummary;
+  }
+
+  return enrichedNode;
+}
+
+async function buildNodeSummary(node, cache) {
   const response = await node.exportAsync({
     format: "JSON_REST_V1",
   });
@@ -581,15 +884,35 @@ async function getNodeSummary(nodeId) {
   const summary = filterFigmaNode(response.document);
   delete summary.children;
 
-  return applyNodeSummaryFields(summary, node);
+  return enrichSummaryNode(summary, node, cache);
 }
 
-function makeJsonSafe(value) {
-  return JSON.parse(JSON.stringify(value));
+async function getNodeSummary(nodeId) {
+  let node;
+
+  if (nodeId) {
+    node = await figma.getNodeByIdAsync(nodeId);
+  } else {
+    if (figma.currentPage.selection.length === 0) {
+      throw new Error("No nodeId provided and nothing is selected");
+    }
+
+    if (figma.currentPage.selection.length > 1) {
+      throw new Error("No nodeId provided and multiple nodes are selected");
+    }
+
+    node = figma.currentPage.selection[0];
+  }
+
+  if (!node) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+
+  return buildNodeSummary(node, createSummaryContext());
 }
 
-function buildNodeInfoFullFromTree(summaryNode, liveNode) {
-  const full = applyNodeSummaryFields(summaryNode, liveNode);
+async function buildNodeInfoFullFromTree(summaryNode, liveNode, cache) {
+  const full = await enrichSummaryNode(summaryNode, liveNode, cache);
 
   if (
     "children" in liveNode &&
@@ -597,8 +920,10 @@ function buildNodeInfoFullFromTree(summaryNode, liveNode) {
     liveNode.children.length > 0 &&
     Array.isArray(summaryNode.children)
   ) {
-    full.children = summaryNode.children.map((childSummary, index) =>
-      buildNodeInfoFullFromTree(childSummary, liveNode.children[index])
+    full.children = await Promise.all(
+      summaryNode.children.map((childSummary, index) =>
+        buildNodeInfoFullFromTree(childSummary, liveNode.children[index], cache)
+      )
     );
   }
 
@@ -641,8 +966,24 @@ async function getNodeInfoFull(nodeId) {
   });
 
   const summaryTree = filterFigmaNode(response.document);
-  const full = buildNodeInfoFullFromTree(summaryTree, node);
+  const full = await buildNodeInfoFullFromTree(summaryTree, node, createSummaryContext());
   return makeJsonSafe(full);
+}
+
+async function resolveSingleTargetNode(nodeId, missingSelectionMessage) {
+  if (nodeId) {
+    const node = await figma.getNodeByIdAsync(nodeId);
+    if (!node) {
+      throw new Error(`Node not found with ID: ${nodeId}`);
+    }
+    return node;
+  }
+
+  if (figma.currentPage.selection.length !== 1) {
+    throw new Error(missingSelectionMessage);
+  }
+
+  return figma.currentPage.selection[0];
 }
 
 async function getNodesInfo(nodeIds) {
@@ -1724,6 +2065,446 @@ async function findIconResources(params) {
     count: results.length,
     icons: results,
     preferredIcon: results[0] || null,
+  };
+}
+
+async function findColorResources(params) {
+  const nodeId = params && params.nodeId;
+  const rootNode = await resolveSingleTargetNode(
+    nodeId,
+    "Select exactly one node or provide nodeId"
+  );
+  const summaryTree = await getNodeInfoFull(rootNode.id);
+  const styleCache = new Map();
+  const resources = [];
+  const seenKeys = new Set();
+
+  function buildPath(path, node) {
+    return [...path, node.name || `Unnamed ${node.type}`];
+  }
+
+  function pushUniqueResource(resource) {
+    const key = [
+      resource.nodeId,
+      resource.property,
+      resource.paintIndex !== undefined ? resource.paintIndex : "",
+      resource.stopIndex !== undefined ? resource.stopIndex : "",
+      resource.effectIndex !== undefined ? resource.effectIndex : "",
+      resource.resolvedColor || "",
+      resource.style ? resource.style.id : "",
+      JSON.stringify(resource.boundVariables || null),
+    ].join("|");
+
+    if (seenKeys.has(key)) {
+      return;
+    }
+
+    seenKeys.add(key);
+    resources.push(resource);
+  }
+
+  async function getStyleInfo(styleId) {
+    if (!styleId) {
+      return undefined;
+    }
+
+    if (styleCache.has(styleId)) {
+      return styleCache.get(styleId);
+    }
+
+    const style = await figma.getStyleByIdAsync(styleId);
+    const styleInfo = style
+      ? {
+          id: style.id,
+          name: style.name,
+          key: "key" in style ? style.key : undefined,
+          remote: !!style.remote,
+        }
+      : null;
+
+    styleCache.set(styleId, styleInfo);
+    return styleInfo || undefined;
+  }
+
+  function classifyResourceKinds(styleInfo, boundVariables, resolvedColor) {
+    const kinds = [];
+
+    if (styleInfo) {
+      kinds.push("style");
+    }
+
+    if (boundVariables && Object.keys(boundVariables).length > 0) {
+      kinds.push("variable");
+    }
+
+    if (kinds.length === 0 && resolvedColor) {
+      kinds.push("hardcoded");
+    }
+
+    return kinds;
+  }
+
+  async function inspectPaints(node, path, property, paints, styleId) {
+    if (!Array.isArray(paints)) {
+      return;
+    }
+
+    const styleInfo = await getStyleInfo(styleId);
+
+    for (let paintIndex = 0; paintIndex < paints.length; paintIndex += 1) {
+      const paint = paints[paintIndex];
+      if (!paint || typeof paint !== "object") {
+        continue;
+      }
+
+      const boundVariables = paint.boundVariables;
+      const resolvedColor = paint.color;
+      const resourceKinds = classifyResourceKinds(styleInfo, boundVariables, resolvedColor);
+
+      if (resourceKinds.length > 0) {
+        pushUniqueResource({
+          nodeId: node.id,
+          nodeName: node.name,
+          nodeType: node.type,
+          path,
+          property,
+          paintIndex,
+          paintType: paint.type,
+          visible: paint.visible !== false,
+          resourceKinds,
+          resolvedColor,
+          style: styleInfo,
+          boundVariables,
+        });
+      }
+
+      if (Array.isArray(paint.gradientStops)) {
+        for (let stopIndex = 0; stopIndex < paint.gradientStops.length; stopIndex += 1) {
+          const stop = paint.gradientStops[stopIndex];
+          const stopBoundVariables = stop.boundVariables;
+          const stopResolvedColor = stop.color;
+          const stopKinds = classifyResourceKinds(undefined, stopBoundVariables, stopResolvedColor);
+
+          if (stopKinds.length === 0) {
+            continue;
+          }
+
+          pushUniqueResource({
+            nodeId: node.id,
+            nodeName: node.name,
+            nodeType: node.type,
+            path,
+            property,
+            paintIndex,
+            stopIndex,
+            paintType: paint.type,
+            visible: paint.visible !== false,
+            resourceKinds: stopKinds,
+            resolvedColor: stopResolvedColor,
+            boundVariables: stopBoundVariables,
+          });
+        }
+      }
+    }
+  }
+
+  async function inspectEffects(node, path, effects) {
+    if (!Array.isArray(effects)) {
+      return;
+    }
+
+    for (let effectIndex = 0; effectIndex < effects.length; effectIndex += 1) {
+      const effect = effects[effectIndex];
+      if (!effect || !effect.color) {
+        continue;
+      }
+
+      pushUniqueResource({
+        nodeId: node.id,
+        nodeName: node.name,
+        nodeType: node.type,
+        path,
+        property: "effects",
+        effectIndex,
+        effectType: effect.type,
+        visible: effect.visible !== false,
+        resourceKinds: ["hardcoded"],
+        resolvedColor: effect.color,
+      });
+    }
+  }
+
+  async function visitSummaryNode(node, path) {
+    if (!node) {
+      return;
+    }
+
+    const nodePath = buildPath(path, node);
+    const nodeBoundVariables = node.boundVariables;
+
+    if (nodeBoundVariables && Object.keys(nodeBoundVariables).length > 0) {
+      pushUniqueResource({
+        nodeId: node.id,
+        nodeName: node.name,
+        nodeType: node.type,
+        path: nodePath,
+        property: "boundVariables",
+        resourceKinds: ["variable"],
+        boundVariables: nodeBoundVariables,
+      });
+    }
+
+    if (Array.isArray(node.fills)) {
+      await inspectPaints(node, nodePath, "fills", node.fills, node.fillStyleId);
+    }
+
+    if (Array.isArray(node.strokes)) {
+      await inspectPaints(node, nodePath, "strokes", node.strokes, node.strokeStyleId);
+    }
+
+    if (Array.isArray(node.effects)) {
+      await inspectEffects(node, nodePath, node.effects);
+    }
+
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      await Promise.all(node.children.map((child) => visitSummaryNode(child, nodePath)));
+    }
+  }
+
+  await visitSummaryNode(summaryTree, []);
+
+  const summary = {
+    variable: resources.filter((resource) => resource.resourceKinds.includes("variable")).length,
+    style: resources.filter((resource) => resource.resourceKinds.includes("style")).length,
+    hardcoded: resources.filter((resource) => resource.resourceKinds.includes("hardcoded")).length,
+  };
+
+  return {
+    nodeId: rootNode.id,
+    nodeName: rootNode.name,
+    count: resources.length,
+    summary,
+    resources,
+  };
+}
+
+async function getNodeBlocks(params) {
+  const nodeId = params && params.nodeId;
+  const blocks = params && Array.isArray(params.blocks) ? params.blocks : [];
+
+  if (blocks.length === 0) {
+    throw new Error("Missing or empty blocks array");
+  }
+
+  const rootNode = await resolveSingleTargetNode(
+    nodeId,
+    "Select exactly one node or provide nodeId"
+  );
+  const rootSummary = await buildNodeSummary(rootNode, createSummaryContext());
+
+  const needsFullTree = blocks.some((block) => [3, 8].includes(block));
+  const fullTree = needsFullTree ? await getNodeInfoFull(rootNode.id) : null;
+
+  function collectTextNodes(node, path, results) {
+    if (!node) {
+      return;
+    }
+
+    const nextPath = [...path, node.name || `Unnamed ${node.type}`];
+    if (node.type === "TEXT" || typeof node.characters === "string") {
+      results.push({
+        id: node.id,
+        name: node.name,
+        path: nextPath,
+        text: node.characters || "",
+        textStyleId: node.textStyleId || null,
+        textStyle: node.textStyle || null,
+        style: node.style || null,
+        fills: node.fills || [],
+        resourceSummary: node.resourceSummary || null,
+      });
+    }
+
+    if (Array.isArray(node.children)) {
+      node.children.forEach((child) => collectTextNodes(child, nextPath, results));
+    }
+  }
+
+  function collectImageResources(node, path, results) {
+    if (!node) {
+      return;
+    }
+
+    const nextPath = [...path, node.name || `Unnamed ${node.type}`];
+    if (Array.isArray(node.fills)) {
+      node.fills.forEach((paint, paintIndex) => {
+        if (paint && paint.type === "IMAGE") {
+          results.push({
+            nodeId: node.id,
+            nodeName: node.name,
+            path: nextPath,
+            property: "fills",
+            paintIndex,
+            scaleMode: paint.scaleMode || null,
+            rotation: paint.rotation !== undefined ? paint.rotation : null,
+          });
+        }
+      });
+    }
+
+    if (Array.isArray(node.children)) {
+      node.children.forEach((child) => collectImageResources(child, nextPath, results));
+    }
+  }
+
+  function buildMetadataBlock() {
+    return {
+      id: rootSummary.id,
+      name: rootSummary.name,
+      type: rootSummary.type,
+      parentId: rootSummary.parentId || null,
+      visible: rootSummary.visible,
+      locked: rootSummary.locked,
+      opacity: rootSummary.opacity !== undefined ? rootSummary.opacity : null,
+      blendMode: rootSummary.blendMode || null,
+      instanceInfo: rootSummary.instanceInfo || null,
+      componentProperties: rootSummary.componentProperties || null,
+    };
+  }
+
+  function buildTextBlock() {
+    const texts = [];
+    collectTextNodes(fullTree, [], texts);
+    return {
+      count: texts.length,
+      texts,
+    };
+  }
+
+  function buildLayoutBlock() {
+    const indexInParent =
+      rootNode.parent && "children" in rootNode.parent
+        ? rootNode.parent.children.findIndex((child) => child.id === rootNode.id)
+        : null;
+
+    return {
+      indexInParent,
+      layoutMode: rootSummary.layoutMode || null,
+      layoutWrap: rootSummary.layoutWrap || null,
+      primaryAxisAlignItems: rootSummary.primaryAxisAlignItems || null,
+      counterAxisAlignItems: rootSummary.counterAxisAlignItems || null,
+      layoutAlign: rootSummary.layoutAlign || null,
+      layoutGrow: rootSummary.layoutGrow !== undefined ? rootSummary.layoutGrow : null,
+      layoutSizingHorizontal: rootSummary.layoutSizingHorizontal || null,
+      layoutSizingVertical: rootSummary.layoutSizingVertical || null,
+      primaryAxisSizingMode: rootSummary.primaryAxisSizingMode || null,
+      counterAxisSizingMode: rootSummary.counterAxisSizingMode || null,
+      itemSpacing: rootSummary.itemSpacing !== undefined ? rootSummary.itemSpacing : null,
+      padding: {
+        left: rootSummary.paddingLeft !== undefined ? rootSummary.paddingLeft : null,
+        right: rootSummary.paddingRight !== undefined ? rootSummary.paddingRight : null,
+        top: rootSummary.paddingTop !== undefined ? rootSummary.paddingTop : null,
+        bottom: rootSummary.paddingBottom !== undefined ? rootSummary.paddingBottom : null,
+      },
+      constraints: rootSummary.constraints || null,
+    };
+  }
+
+  function buildGeometryBlock() {
+    return {
+      absoluteBoundingBox: rootSummary.absoluteBoundingBox || null,
+      cornerRadius: rootSummary.cornerRadius !== undefined ? rootSummary.cornerRadius : null,
+      strokeWeight: rootSummary.strokeWeight !== undefined ? rootSummary.strokeWeight : null,
+      strokeAlign: rootSummary.strokeAlign || null,
+      clipsContent: rootSummary.clipsContent !== undefined ? rootSummary.clipsContent : null,
+    };
+  }
+
+  function buildEffectsBlock() {
+    return {
+      effectStyleId: rootSummary.effectStyleId || null,
+      effectStyle: rootSummary.effectStyle || null,
+      effects: rootSummary.effects || [],
+    };
+  }
+
+  async function buildIconsImagesBlock() {
+    const icons = await findIconResources({ nodeId: rootNode.id });
+    const images = [];
+    collectImageResources(fullTree, [], images);
+    return {
+      icons,
+      images: {
+        count: images.length,
+        resources: images,
+      },
+    };
+  }
+
+  function buildStateVariantsBlock() {
+    return {
+      instanceInfo: rootSummary.instanceInfo || null,
+      componentProperties: rootSummary.componentProperties || null,
+      visible: rootSummary.visible,
+      locked: rootSummary.locked,
+    };
+  }
+
+  const requestedBlocks = {};
+
+  for (const block of blocks) {
+    switch (block) {
+      case 1:
+        requestedBlocks[block] = buildMetadataBlock();
+        break;
+      case 2:
+        requestedBlocks[block] = await findColorResources({ nodeId: rootNode.id });
+        break;
+      case 3:
+        requestedBlocks[block] = buildTextBlock();
+        break;
+      case 4:
+        requestedBlocks[block] = buildLayoutBlock();
+        break;
+      case 5:
+        requestedBlocks[block] = buildGeometryBlock();
+        break;
+      case 6:
+        requestedBlocks[block] = buildEffectsBlock();
+        break;
+      case 7:
+        requestedBlocks[block] = buildNodeChildrenTree(rootNode);
+        break;
+      case 8:
+        requestedBlocks[block] = await buildIconsImagesBlock();
+        break;
+      case 9:
+        requestedBlocks[block] = buildStateVariantsBlock();
+        break;
+      default:
+        requestedBlocks[block] = {
+          error: "Unknown block number",
+        };
+        break;
+    }
+  }
+
+  return {
+    nodeId: rootNode.id,
+    nodeName: rootNode.name,
+    requestedBlocks: blocks,
+    blockDefinitions: {
+      1: "node metadata",
+      2: "color styles and variables",
+      3: "text content, styles, and color resources",
+      4: "layout data",
+      5: "geometry and shape",
+      6: "effects and decoration",
+      7: "child structure",
+      8: "icon and image resources",
+      9: "state and variants",
+    },
+    blocks: requestedBlocks,
   };
 }
 

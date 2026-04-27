@@ -130,6 +130,9 @@ The MCP server provides the following tools for interacting with Figma:
 
 - `get_document_info` - Get information about the current Figma document
 - `get_selection` - Get information about the current selection
+- `get_node_summary` - Get shallow information about a node; if no `nodeId` is provided, it uses the single selected node
+- `get_node_blocks` - Get only the requested blocks of node information. Blocks: `1` metadata, `2` color resources, `3` text resources, `4` layout, `5` geometry, `6` effects, `7` child structure, `8` icon/image resources, `9` state/variants
+- `find_color_resources` - Find color resources across a node and its nested children; if no `nodeId` is provided, it uses the single selected node
 - `read_my_design` - Get detailed node information about the current selection without parameters
 - `get_node_info` - Get detailed information about a specific node
 - `get_nodes_info` - Get detailed information about multiple nodes by providing an array of node IDs
@@ -229,13 +232,14 @@ When working with the Figma MCP:
 1. Always join a channel before sending commands
 2. Get document overview using `get_document_info` first
 3. Check current selection with `get_selection` before modifications
-4. Use appropriate creation tools based on needs:
+4. When a single node is already selected and only shallow properties are needed, `get_node_summary` can be called without a `nodeId`
+5. Use appropriate creation tools based on needs:
    - `create_frame` for containers
    - `create_rectangle` for basic shapes
    - `create_text` for text elements
-5. Verify changes using `get_node_info`
-6. Use component instances when possible for consistency
-7. Handle errors appropriately as all commands can throw exceptions
+6. Verify changes using `get_node_info`
+7. Use component instances when possible for consistency
+8. Handle errors appropriately as all commands can throw exceptions
 8. For large designs:
    - Use chunking parameters in `scan_text_nodes`
    - Monitor progress through WebSocket updates
