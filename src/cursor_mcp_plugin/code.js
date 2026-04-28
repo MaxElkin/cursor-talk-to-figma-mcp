@@ -166,6 +166,14 @@ async function handleCommand(command, params) {
       return await deleteNode(params);
     case "delete_multiple_nodes":
       return await deleteMultipleNodes(params);
+    case "move_nodes_to_parent":
+      return await moveNodesToParent(params);
+    case "reorder_nodes":
+      return await reorderNodes(params);
+    case "group_nodes":
+      return await groupNodes(params);
+    case "ungroup_node":
+      return await ungroupNode(params);
     case "get_styles":
       return await getStyles();
     case "get_local_components":
@@ -321,43 +329,54 @@ async function getSelection() {
 async function listAnchorNodes() {
   await figma.currentPage.loadAsync();
 
-  const allowedSectionNames = new Set([
-    "Components",
-    "Screens/Phone",
-    "Screens/Desktop",
-  ]);
-
-  const anchorPrefixes = ["Component/", "Screen/"];
-  const allowedNodeTypes = new Set(["COMPONENT", "COMPONENT_SET"]);
   const sections = figma.currentPage.children.filter((node) => {
-    return node.type === "SECTION" && allowedSectionNames.has(node.name);
+    return node.type === "SECTION";
   });
 
   const entries = [];
 
-  for (const section of sections) {
-    const nodes = section.findAll((node) => {
-      if (!node || typeof node.name !== "string") {
-        return false;
-      }
+  function visitDescendants(rootNode, currentNode, depth) {
+    if (!currentNode || typeof currentNode.name !== "string") {
+      return;
+    }
 
-      return (
-        allowedNodeTypes.has(node.type) &&
-        anchorPrefixes.some((prefix) => node.name.startsWith(prefix))
-      );
-    });
-
-    for (const node of nodes) {
+    if (
+      depth > 0 &&
+      depth <= 2
+    ) {
       entries.push({
-        id: node.id,
-        name: node.name,
-        type: node.type,
-        sectionName: section.name,
+        id: currentNode.id,
+        name: currentNode.name,
+        type: currentNode.type,
+        sectionName: rootNode.name,
       });
+    }
+
+    if (depth >= 2 || !("children" in currentNode) || !Array.isArray(currentNode.children)) {
+      return;
+    }
+
+    for (const child of currentNode.children) {
+      visitDescendants(rootNode, child, depth + 1);
     }
   }
 
-  entries.sort((a, b) => {
+  for (const section of sections) {
+    for (const child of section.children) {
+      visitDescendants(section, child, 1);
+    }
+  }
+
+  const dedupedEntries = [];
+  const seenIds = new Set();
+  for (const entry of entries) {
+    if (!seenIds.has(entry.id)) {
+      seenIds.add(entry.id);
+      dedupedEntries.push(entry);
+    }
+  }
+
+  dedupedEntries.sort((a, b) => {
     if (a.sectionName !== b.sectionName) {
       return a.sectionName.localeCompare(b.sectionName);
     }
@@ -368,9 +387,9 @@ async function listAnchorNodes() {
   });
 
   return {
-    count: entries.length,
-    sectionsScanned: Array.from(allowedSectionNames),
-    nodes: entries,
+    count: dedupedEntries.length,
+    sectionsScanned: sections.map((section) => section.name),
+    nodes: dedupedEntries,
   };
 }
 
@@ -1726,6 +1745,310 @@ async function deleteNode(params) {
   node.remove();
 
   return nodeInfo;
+}
+
+function isChildrenContainer(node) {
+  return Boolean(
+    node &&
+      typeof node.appendChild === "function" &&
+      Array.isArray(node.children)
+  );
+}
+
+function isSceneNodeWithPosition(node) {
+  return Boolean(
+    node &&
+      typeof node.x === "number" &&
+      typeof node.y === "number"
+  );
+}
+
+function getParentOrigin(parent) {
+  if (parent && parent.type !== "PAGE" && parent.absoluteBoundingBox) {
+    return {
+      x: parent.absoluteBoundingBox.x,
+      y: parent.absoluteBoundingBox.y,
+    };
+  }
+
+  return { x: 0, y: 0 };
+}
+
+function getAbsolutePosition(node) {
+  if (node.absoluteBoundingBox) {
+    return {
+      x: node.absoluteBoundingBox.x,
+      y: node.absoluteBoundingBox.y,
+    };
+  }
+
+  const parentOrigin = getParentOrigin(node.parent);
+  return {
+    x: parentOrigin.x + node.x,
+    y: parentOrigin.y + node.y,
+  };
+}
+
+async function moveNodesToParent(params) {
+  const {
+    nodeIds,
+    parentId,
+    index,
+    placement = "preserve_absolute",
+  } = params || {};
+
+  if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
+    throw new Error("Missing or invalid nodeIds parameter");
+  }
+
+  if (!parentId) {
+    throw new Error("Missing parentId parameter");
+  }
+
+  if (!["preserve_absolute", "inside_parent"].includes(placement)) {
+    throw new Error(`Invalid placement: ${placement}`);
+  }
+
+  const parent = await figma.getNodeByIdAsync(parentId);
+  if (!parent) {
+    throw new Error(`Parent node not found with ID: ${parentId}`);
+  }
+
+  if (!isChildrenContainer(parent)) {
+    throw new Error(`Parent node does not support children: ${parentId}`);
+  }
+
+  const parentOrigin = getParentOrigin(parent);
+  const nodes = await Promise.all(
+    nodeIds.map(async (nodeId) => {
+      const node = await figma.getNodeByIdAsync(nodeId);
+      if (!node) {
+        throw new Error(`Node not found with ID: ${nodeId}`);
+      }
+      if (!isSceneNodeWithPosition(node)) {
+        throw new Error(`Node does not support positional reparenting: ${nodeId}`);
+      }
+
+      return {
+        node,
+        absolutePosition: getAbsolutePosition(node),
+        oldParentId: node.parent ? node.parent.id : null,
+      };
+    })
+  );
+
+  const orderedNodes = nodes
+    .slice()
+    .sort((a, b) => {
+      if (
+        a.node.parent &&
+        b.node.parent &&
+        a.node.parent.id === b.node.parent.id &&
+        Array.isArray(a.node.parent.children)
+      ) {
+        return a.node.parent.children.indexOf(a.node) - a.node.parent.children.indexOf(b.node);
+      }
+      return a.node.id.localeCompare(b.node.id);
+    });
+
+  orderedNodes.forEach(({ node }, offset) => {
+    if (typeof index === "number") {
+      parent.insertChild(index + offset, node);
+    } else {
+      parent.appendChild(node);
+    }
+
+    if (placement === "preserve_absolute") {
+      node.x = orderedNodes[offset].absolutePosition.x - parentOrigin.x;
+      node.y = orderedNodes[offset].absolutePosition.y - parentOrigin.y;
+    } else {
+      node.x = 0;
+      node.y = 0;
+    }
+  });
+
+  return {
+    parentId: parent.id,
+    placement,
+    movedNodes: orderedNodes.map(({ node, absolutePosition, oldParentId }) => ({
+      id: node.id,
+      name: node.name,
+      type: node.type,
+      oldParentId,
+      newParentId: parent.id,
+      x: node.x,
+      y: node.y,
+      originalAbsoluteX: absolutePosition.x,
+      originalAbsoluteY: absolutePosition.y,
+    })),
+  };
+}
+
+async function reorderNodes(params) {
+  const { nodeIds, position } = params || {};
+
+  if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
+    throw new Error("Missing or invalid nodeIds parameter");
+  }
+
+  if (!["front", "forward", "backward", "back"].includes(position)) {
+    throw new Error(`Invalid position: ${position}`);
+  }
+
+  const nodes = await Promise.all(
+    nodeIds.map(async (nodeId) => {
+      const node = await figma.getNodeByIdAsync(nodeId);
+      if (!node) {
+        throw new Error(`Node not found with ID: ${nodeId}`);
+      }
+      return node;
+    })
+  );
+
+  const parent = nodes[0].parent;
+  if (!parent || !isChildrenContainer(parent)) {
+    throw new Error("Target nodes must have a parent that supports child reordering");
+  }
+
+  const mixedParents = nodes.some((node) => !node.parent || node.parent.id !== parent.id);
+  if (mixedParents) {
+    throw new Error("All nodes must share the same parent");
+  }
+
+  const currentOrder = parent.children.slice();
+  const nodeSet = new Set(nodes.map((node) => node.id));
+  const selectedInOrder = currentOrder.filter((child) => nodeSet.has(child.id));
+  const unselectedInOrder = currentOrder.filter((child) => !nodeSet.has(child.id));
+
+  let nextOrder = currentOrder.slice();
+  if (position === "front") {
+    nextOrder = unselectedInOrder.concat(selectedInOrder);
+  } else if (position === "back") {
+    nextOrder = selectedInOrder.concat(unselectedInOrder);
+  } else if (position === "forward") {
+    for (let i = nextOrder.length - 2; i >= 0; i--) {
+      if (nodeSet.has(nextOrder[i].id) && !nodeSet.has(nextOrder[i + 1].id)) {
+        const temp = nextOrder[i];
+        nextOrder[i] = nextOrder[i + 1];
+        nextOrder[i + 1] = temp;
+      }
+    }
+  } else if (position === "backward") {
+    for (let i = 1; i < nextOrder.length; i++) {
+      if (nodeSet.has(nextOrder[i].id) && !nodeSet.has(nextOrder[i - 1].id)) {
+        const temp = nextOrder[i];
+        nextOrder[i] = nextOrder[i - 1];
+        nextOrder[i - 1] = temp;
+      }
+    }
+  }
+
+  nextOrder.forEach((node, index) => {
+    parent.insertChild(index, node);
+  });
+
+  return {
+    parentId: parent.id,
+    position,
+    nodeIds: selectedInOrder.map((node) => node.id),
+    order: parent.children.map((child) => ({
+      id: child.id,
+      name: child.name,
+      type: child.type,
+    })),
+  };
+}
+
+async function groupNodes(params) {
+  const { nodeIds, parentId, index, name } = params || {};
+
+  if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
+    throw new Error("Missing or invalid nodeIds parameter");
+  }
+
+  const nodes = await Promise.all(
+    nodeIds.map(async (nodeId) => {
+      const node = await figma.getNodeByIdAsync(nodeId);
+      if (!node) {
+        throw new Error(`Node not found with ID: ${nodeId}`);
+      }
+      return node;
+    })
+  );
+
+  const sceneNodes = nodes.filter((node) => typeof node.x === "number");
+  if (sceneNodes.length !== nodes.length) {
+    throw new Error("All provided nodes must be scene nodes");
+  }
+
+  let parent = null;
+  if (parentId) {
+    parent = await figma.getNodeByIdAsync(parentId);
+    if (!parent) {
+      throw new Error(`Parent node not found with ID: ${parentId}`);
+    }
+    if (!isChildrenContainer(parent)) {
+      throw new Error(`Parent node does not support children: ${parentId}`);
+    }
+  } else {
+    parent = sceneNodes[0].parent;
+    if (!parent || !isChildrenContainer(parent)) {
+      throw new Error("Could not determine a valid parent for the new group");
+    }
+
+    const hasDifferentParent = sceneNodes.some((node) => !node.parent || node.parent.id !== parent.id);
+    if (hasDifferentParent) {
+      throw new Error("All nodes must share the same parent when parentId is omitted");
+    }
+  }
+
+  const group = typeof index === "number"
+    ? figma.group(sceneNodes, parent, index)
+    : figma.group(sceneNodes, parent);
+
+  if (name) {
+    group.name = name;
+  }
+
+  return {
+    id: group.id,
+    name: group.name,
+    type: group.type,
+    parentId: group.parent ? group.parent.id : null,
+    childIds: group.children.map((child) => child.id),
+  };
+}
+
+async function ungroupNode(params) {
+  const { nodeId } = params || {};
+
+  if (!nodeId) {
+    throw new Error("Missing nodeId parameter");
+  }
+
+  const node = await figma.getNodeByIdAsync(nodeId);
+  if (!node) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+
+  if (node.type !== "GROUP") {
+    throw new Error(`Node is not a group: ${nodeId}`);
+  }
+
+  const groupName = node.name;
+  const parentId = node.parent ? node.parent.id : null;
+  const children = node.ungroup();
+
+  return {
+    groupId: nodeId,
+    groupName,
+    parentId,
+    children: children.map((child) => ({
+      id: child.id,
+      name: child.name,
+      type: child.type,
+    })),
+  };
 }
 
 async function getStyles() {

@@ -816,6 +816,129 @@ server.tool(
   }
 );
 server.tool(
+  "move_nodes_to_parent",
+  "Move one or more nodes to a new parent in Figma",
+  {
+    nodeIds: import_zod.z.array(import_zod.z.string()).min(1).describe("Array of node IDs to move"),
+    parentId: import_zod.z.string().describe("The ID of the target parent node"),
+    index: import_zod.z.number().int().optional().describe("Optional insertion index in the new parent"),
+    placement: import_zod.z.enum(["preserve_absolute", "inside_parent"]).optional().describe("How to place nodes after reparenting. Defaults to preserve_absolute.")
+  },
+  async ({ nodeIds, parentId, index, placement }) => {
+    try {
+      const result = await sendCommandToFigma("move_nodes_to_parent", { nodeIds, parentId, index, placement });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error moving nodes to parent: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
+  "reorder_nodes",
+  "Reorder one or more nodes within their parent using Figma layer-order actions",
+  {
+    nodeIds: import_zod.z.array(import_zod.z.string()).min(1).describe("Array of node IDs to reorder"),
+    position: import_zod.z.enum(["front", "forward", "backward", "back"]).describe("Layer-order action to apply")
+  },
+  async ({ nodeIds, position }) => {
+    try {
+      const result = await sendCommandToFigma("reorder_nodes", { nodeIds, position });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error reordering nodes: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
+  "group_nodes",
+  "Group multiple nodes in Figma under a single group node",
+  {
+    nodeIds: import_zod.z.array(import_zod.z.string()).min(1).describe("Array of node IDs to group"),
+    parentId: import_zod.z.string().optional().describe("Optional parent node ID for the new group. If omitted, uses the shared parent of the provided nodes."),
+    index: import_zod.z.number().int().optional().describe("Optional insertion index for the new group in the parent."),
+    name: import_zod.z.string().optional().describe("Optional name for the created group.")
+  },
+  async ({ nodeIds, parentId, index, name }) => {
+    try {
+      const result = await sendCommandToFigma("group_nodes", { nodeIds, parentId, index, name });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error grouping nodes: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
+  "ungroup_node",
+  "Ungroup a group node in Figma and return its children to the parent",
+  {
+    nodeId: import_zod.z.string().describe("The ID of the group node to ungroup")
+  },
+  async ({ nodeId }) => {
+    try {
+      const result = await sendCommandToFigma("ungroup_node", { nodeId });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error ungrouping node: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
   "export_node_as_image",
   "Export a node as an image from Figma",
   {

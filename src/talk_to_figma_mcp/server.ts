@@ -981,6 +981,141 @@ server.tool(
   }
 );
 
+// Move Nodes To Parent Tool
+server.tool(
+  "move_nodes_to_parent",
+  "Move one or more nodes to a new parent in Figma",
+  {
+    nodeIds: z.array(z.string()).min(1).describe("Array of node IDs to move"),
+    parentId: z.string().describe("The ID of the target parent node"),
+    index: z.number().int().optional().describe("Optional insertion index in the new parent"),
+    placement: z.enum(["preserve_absolute", "inside_parent"]).optional().describe("How to place nodes after reparenting. Defaults to preserve_absolute."),
+  },
+  async ({ nodeIds, parentId, index, placement }: any) => {
+    try {
+      const result = await sendCommandToFigma("move_nodes_to_parent", { nodeIds, parentId, index, placement });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error moving nodes to parent: ${error instanceof Error ? error.message : String(error)
+              }`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Reorder Nodes Tool
+server.tool(
+  "reorder_nodes",
+  "Reorder one or more nodes within their parent using Figma layer-order actions",
+  {
+    nodeIds: z.array(z.string()).min(1).describe("Array of node IDs to reorder"),
+    position: z.enum(["front", "forward", "backward", "back"]).describe("Layer-order action to apply"),
+  },
+  async ({ nodeIds, position }: any) => {
+    try {
+      const result = await sendCommandToFigma("reorder_nodes", { nodeIds, position });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error reordering nodes: ${error instanceof Error ? error.message : String(error)
+              }`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Group Nodes Tool
+server.tool(
+  "group_nodes",
+  "Group multiple nodes in Figma under a single group node",
+  {
+    nodeIds: z.array(z.string()).min(1).describe("Array of node IDs to group"),
+    parentId: z.string().optional().describe("Optional parent node ID for the new group. If omitted, uses the shared parent of the provided nodes."),
+    index: z.number().int().optional().describe("Optional insertion index for the new group in the parent."),
+    name: z.string().optional().describe("Optional name for the created group."),
+  },
+  async ({ nodeIds, parentId, index, name }: any) => {
+    try {
+      const result = await sendCommandToFigma("group_nodes", { nodeIds, parentId, index, name });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error grouping nodes: ${error instanceof Error ? error.message : String(error)
+              }`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Ungroup Node Tool
+server.tool(
+  "ungroup_node",
+  "Ungroup a group node in Figma and return its children to the parent",
+  {
+    nodeId: z.string().describe("The ID of the group node to ungroup"),
+  },
+  async ({ nodeId }: any) => {
+    try {
+      const result = await sendCommandToFigma("ungroup_node", { nodeId });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error ungrouping node: ${error instanceof Error ? error.message : String(error)
+              }`,
+          },
+        ],
+      };
+    }
+  }
+);
+
 // Export Node as Image Tool
 server.tool(
   "export_node_as_image",
@@ -3045,6 +3180,10 @@ type FigmaCommand =
   | "resize_node"
   | "delete_node"
   | "delete_multiple_nodes"
+  | "move_nodes_to_parent"
+  | "reorder_nodes"
+  | "group_nodes"
+  | "ungroup_node"
   | "get_styles"
   | "get_local_components"
   | "list_anchor_nodes"
@@ -3157,6 +3296,25 @@ type CommandParams = {
   };
   delete_multiple_nodes: {
     nodeIds: string[];
+  };
+  move_nodes_to_parent: {
+    nodeIds: string[];
+    parentId: string;
+    index?: number;
+    placement?: "preserve_absolute" | "inside_parent";
+  };
+  reorder_nodes: {
+    nodeIds: string[];
+    position: "front" | "forward" | "backward" | "back";
+  };
+  group_nodes: {
+    nodeIds: string[];
+    parentId?: string;
+    index?: number;
+    name?: string;
+  };
+  ungroup_node: {
+    nodeId: string;
   };
   get_styles: Record<string, never>;
   get_local_components: Record<string, never>;
