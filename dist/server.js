@@ -484,16 +484,17 @@ server.tool(
   },
   async ({ nodeId, r, g, b, a }) => {
     try {
+      const alpha = a ?? 1;
       const result = await sendCommandToFigma("set_fill_color", {
         nodeId,
-        color: { r, g, b, a: a || 1 }
+        color: { r, g, b, a: alpha }
       });
       const typedResult = result;
       return {
         content: [
           {
             type: "text",
-            text: `Set fill color of node "${typedResult.name}" to RGBA(${r}, ${g}, ${b}, ${a || 1})`
+            text: typedResult.fillsCleared ? `Cleared fills of node "${typedResult.name}"` : `Set fill color of node "${typedResult.name}" to RGBA(${r}, ${g}, ${b}, ${alpha})`
           }
         ]
       };
@@ -542,6 +543,84 @@ server.tool(
           {
             type: "text",
             text: `Error setting stroke color: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
+  "set_color_style",
+  "Apply a local Figma paint style to the fills or strokes of a node",
+  {
+    nodeId: z.string().describe("The ID of the node to modify"),
+    property: z.enum(["fills", "strokes"]).describe("Which paint property should use the style"),
+    styleId: z.string().optional().describe("The local paint style ID to apply"),
+    styleName: z.string().optional().describe("The local paint style name to apply. Used when styleId is not provided.")
+  },
+  async ({ nodeId, property, styleId, styleName }) => {
+    try {
+      const result = await sendCommandToFigma("set_color_style", {
+        nodeId,
+        property,
+        styleId,
+        styleName
+      });
+      const typedResult = result;
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Set ${typedResult.property} style of node "${typedResult.name}" to "${typedResult.styleName}" (${typedResult.styleId})`
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error setting color style: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
+  "set_color_variable",
+  "Bind a local Figma color variable to a node's fill or stroke paint",
+  {
+    nodeId: z.string().describe("The ID of the node to modify"),
+    property: z.enum(["fills", "strokes"]).describe("Which paint property should use the variable"),
+    variableId: z.string().optional().describe("The local color variable ID to bind"),
+    variableName: z.string().optional().describe("The local color variable name to bind. Used when variableId is not provided."),
+    paintIndex: z.number().int().min(0).optional().describe("The fill or stroke paint index to bind. Defaults to 0.")
+  },
+  async ({ nodeId, property, variableId, variableName, paintIndex }) => {
+    try {
+      const result = await sendCommandToFigma("set_color_variable", {
+        nodeId,
+        property,
+        variableId,
+        variableName,
+        paintIndex
+      });
+      const typedResult = result;
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Bound ${typedResult.property}[${typedResult.paintIndex}] of node "${typedResult.name}" to color variable "${typedResult.variableName}" (${typedResult.variableId})`
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error setting color variable: ${error instanceof Error ? error.message : String(error)}`
           }
         ]
       };
@@ -1063,7 +1142,7 @@ server.tool(
 );
 server.tool(
   "get_node_children_tree",
-  "Get only the recursive children tree for a specific node in Figma with id, name, type, and children",
+  "Get only the recursive children tree for a specific node in Figma with id, name, type, and children.",
   {
     nodeId: z.string().describe("The ID of the node to get the recursive children tree for")
   },
@@ -1118,6 +1197,41 @@ server.tool(
   }
 );
 server.tool(
+  "list_color_variables",
+  "List local Figma color variables, optionally filtered by name prefix or collection",
+  {
+    namePrefix: z.string().optional().describe("Only include variables whose name starts with this prefix, for example Schemes/"),
+    collectionName: z.string().optional().describe("Only include variables from a collection with this exact name"),
+    includeValues: z.boolean().optional().describe("Whether to include per-mode color values. Defaults to false.")
+  },
+  async ({ namePrefix, collectionName, includeValues }) => {
+    try {
+      const result = await sendCommandToFigma("list_color_variables", {
+        namePrefix,
+        collectionName,
+        includeValues
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error listing color variables: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
   "get_local_components",
   "Get all local components from the Figma document",
   {},
@@ -1146,7 +1260,7 @@ server.tool(
 );
 server.tool(
   "list_anchor_nodes",
-  "List major anchor nodes from the Components, Screens/Phone, and Screens/Desktop sections",
+  "List nodes one or two levels down from each root section, including each node's parent path",
   {},
   async () => {
     try {

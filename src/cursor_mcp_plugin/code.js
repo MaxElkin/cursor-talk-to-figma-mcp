@@ -156,6 +156,10 @@ async function handleCommand(command, params) {
       return await setFillColor(params);
     case "set_stroke_color":
       return await setStrokeColor(params);
+    case "set_color_style":
+      return await setColorStyle(params);
+    case "set_color_variable":
+      return await setColorVariable(params);
     case "set_effects":
       return await setEffects(params);
     case "move_node":
@@ -176,6 +180,8 @@ async function handleCommand(command, params) {
       return await ungroupNode(params);
     case "get_styles":
       return await getStyles();
+    case "list_color_variables":
+      return await listColorVariables(params);
     case "get_local_components":
       return await getLocalComponents(params);
     case "list_anchor_nodes":
@@ -335,7 +341,7 @@ async function listAnchorNodes() {
 
   const entries = [];
 
-  function visitDescendants(rootNode, currentNode, depth) {
+  function visitDescendants(rootNode, currentNode, depth, parentPathParts) {
     if (!currentNode || typeof currentNode.name !== "string") {
       return;
     }
@@ -347,8 +353,8 @@ async function listAnchorNodes() {
       entries.push({
         id: currentNode.id,
         name: currentNode.name,
+        path: parentPathParts.join("/"),
         type: currentNode.type,
-        sectionName: rootNode.name,
       });
     }
 
@@ -357,13 +363,13 @@ async function listAnchorNodes() {
     }
 
     for (const child of currentNode.children) {
-      visitDescendants(rootNode, child, depth + 1);
+      visitDescendants(rootNode, child, depth + 1, parentPathParts.concat(currentNode.name));
     }
   }
 
   for (const section of sections) {
     for (const child of section.children) {
-      visitDescendants(section, child, 1);
+      visitDescendants(section, child, 1, [section.name]);
     }
   }
 
@@ -377,8 +383,8 @@ async function listAnchorNodes() {
   }
 
   dedupedEntries.sort((a, b) => {
-    if (a.sectionName !== b.sectionName) {
-      return a.sectionName.localeCompare(b.sectionName);
+    if (a.path !== b.path) {
+      return a.path.localeCompare(b.path);
     }
     if (a.name !== b.name) {
       return a.name.localeCompare(b.name);
@@ -1522,12 +1528,23 @@ async function setFillColor(params) {
     throw new Error(`Node does not support fills: ${nodeId}`);
   }
 
+  if (a === 0) {
+    node.fills = [];
+
+    return {
+      id: node.id,
+      name: node.name,
+      fills: [],
+      fillsCleared: true,
+    };
+  }
+
   // Create RGBA color
   const rgbColor = {
     r: parseFloat(r) || 0,
     g: parseFloat(g) || 0,
     b: parseFloat(b) || 0,
-    a: parseFloat(a) || 1,
+    a: a === undefined ? 1 : a,
   };
 
   // Set fill
@@ -1603,6 +1620,152 @@ async function setStrokeColor(params) {
     name: node.name,
     strokes: node.strokes,
     strokeWeight: "strokeWeight" in node ? node.strokeWeight : undefined,
+  };
+}
+
+async function resolveLocalPaintStyle({ styleId, styleName }) {
+  if (styleId) {
+    const style = await figma.getStyleByIdAsync(styleId);
+    if (!style) {
+      throw new Error(`Paint style not found with ID: ${styleId}`);
+    }
+    if (style.type !== "PAINT") {
+      throw new Error(`Style is not a paint style: ${styleId}`);
+    }
+    return style;
+  }
+
+  if (!styleName) {
+    throw new Error("Missing styleId or styleName parameter");
+  }
+
+  const styles = await figma.getLocalPaintStylesAsync();
+  const matches = styles.filter((style) => style.name === styleName);
+
+  if (matches.length === 0) {
+    throw new Error(`Paint style not found with name: ${styleName}`);
+  }
+  if (matches.length > 1) {
+    throw new Error(`Multiple paint styles found with name: ${styleName}. Use styleId instead.`);
+  }
+
+  return matches[0];
+}
+
+async function setColorStyle(params) {
+  const { nodeId, property, styleId, styleName } = params || {};
+
+  if (!nodeId) {
+    throw new Error("Missing nodeId parameter");
+  }
+  if (property !== "fills" && property !== "strokes") {
+    throw new Error("property must be either fills or strokes");
+  }
+
+  const node = await figma.getNodeByIdAsync(nodeId);
+  if (!node) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+
+  const styleProperty = property === "fills" ? "fillStyleId" : "strokeStyleId";
+  if (!(property in node) || !(styleProperty in node)) {
+    throw new Error(`Node does not support ${property} styles: ${nodeId}`);
+  }
+
+  const style = await resolveLocalPaintStyle({ styleId, styleName });
+  node[styleProperty] = style.id;
+
+  return {
+    id: node.id,
+    name: node.name,
+    property,
+    styleId: style.id,
+    styleName: style.name,
+    styleKey: style.key,
+  };
+}
+
+async function resolveLocalColorVariable({ variableId, variableName }) {
+  if (variableId) {
+    const variable = await figma.variables.getVariableByIdAsync(variableId);
+    if (!variable) {
+      throw new Error(`Color variable not found with ID: ${variableId}`);
+    }
+    if (variable.resolvedType !== "COLOR") {
+      throw new Error(`Variable is not a color variable: ${variableId}`);
+    }
+    return variable;
+  }
+
+  if (!variableName) {
+    throw new Error("Missing variableId or variableName parameter");
+  }
+
+  const variables = await figma.variables.getLocalVariablesAsync("COLOR");
+  const matches = variables.filter((variable) => variable.name === variableName);
+
+  if (matches.length === 0) {
+    throw new Error(`Color variable not found with name: ${variableName}`);
+  }
+  if (matches.length > 1) {
+    throw new Error(`Multiple color variables found with name: ${variableName}. Use variableId instead.`);
+  }
+
+  return matches[0];
+}
+
+async function setColorVariable(params) {
+  const { nodeId, property, variableId, variableName, paintIndex = 0 } = params || {};
+
+  if (!nodeId) {
+    throw new Error("Missing nodeId parameter");
+  }
+  if (property !== "fills" && property !== "strokes") {
+    throw new Error("property must be either fills or strokes");
+  }
+  if (!Number.isInteger(paintIndex) || paintIndex < 0) {
+    throw new Error("paintIndex must be a non-negative integer");
+  }
+
+  const node = await figma.getNodeByIdAsync(nodeId);
+  if (!node) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+  if (!(property in node)) {
+    throw new Error(`Node does not support ${property}: ${nodeId}`);
+  }
+
+  const paints = node[property];
+  if (!Array.isArray(paints)) {
+    throw new Error(`Node has mixed ${property}; select a node with concrete paints`);
+  }
+  if (!paints[paintIndex]) {
+    throw new Error(`No ${property} paint at index ${paintIndex}`);
+  }
+  if (paints[paintIndex].type !== "SOLID") {
+    throw new Error(`Only SOLID ${property} paints can be bound to color variables`);
+  }
+  if (!figma.variables || typeof figma.variables.setBoundVariableForPaint !== "function") {
+    throw new Error("This Figma version does not support binding variables to paints");
+  }
+
+  const variable = await resolveLocalColorVariable({ variableId, variableName });
+  const nextPaints = paints.slice();
+  nextPaints[paintIndex] = figma.variables.setBoundVariableForPaint(
+    nextPaints[paintIndex],
+    "color",
+    variable
+  );
+  node[property] = nextPaints;
+
+  return {
+    id: node.id,
+    name: node.name,
+    property,
+    paintIndex,
+    variableId: variable.id,
+    variableName: variable.name,
+    variableKey: variable.key,
   };
 }
 
@@ -2083,6 +2246,83 @@ async function getStyles() {
       name: style.name,
       key: style.key,
     })),
+  };
+}
+
+function summarizeVariableValue(value) {
+  if (value && typeof value === "object" && "r" in value && "g" in value && "b" in value) {
+    return {
+      type: "COLOR",
+      color: rgbaToHex(value),
+      rgba: makeJsonSafe(value),
+    };
+  }
+
+  return makeJsonSafe(value);
+}
+
+async function listColorVariables(params) {
+  const { namePrefix, collectionName, includeValues = false } = params || {};
+
+  if (!figma.variables || typeof figma.variables.getLocalVariablesAsync !== "function") {
+    throw new Error("This Figma version does not support local variables");
+  }
+
+  const variables = await figma.variables.getLocalVariablesAsync("COLOR");
+  const collectionsById = new Map();
+
+  async function getCollection(variable) {
+    if (!variable.variableCollectionId) {
+      return null;
+    }
+    if (!collectionsById.has(variable.variableCollectionId)) {
+      collectionsById.set(
+        variable.variableCollectionId,
+        await figma.variables.getVariableCollectionByIdAsync(variable.variableCollectionId)
+      );
+    }
+    return collectionsById.get(variable.variableCollectionId);
+  }
+
+  const results = [];
+
+  for (const variable of variables) {
+    if (namePrefix && !variable.name.startsWith(namePrefix)) {
+      continue;
+    }
+
+    const collection = await getCollection(variable);
+    if (collectionName && (!collection || collection.name !== collectionName)) {
+      continue;
+    }
+
+    const summary = {
+      id: variable.id,
+      name: variable.name,
+      key: variable.key,
+      collectionId: variable.variableCollectionId,
+      collectionName: collection ? collection.name : null,
+    };
+
+    if (includeValues) {
+      summary.valuesByMode = {};
+
+      for (const mode of collection ? collection.modes : []) {
+        summary.valuesByMode[mode.name] = summarizeVariableValue(variable.valuesByMode[mode.modeId]);
+      }
+    }
+
+    results.push(summary);
+  }
+
+  results.sort((a, b) => a.name.localeCompare(b.name));
+
+  return {
+    count: results.length,
+    namePrefix: namePrefix || null,
+    collectionName: collectionName || null,
+    includeValues,
+    variables: results,
   };
 }
 
