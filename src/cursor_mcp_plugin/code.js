@@ -127,8 +127,8 @@ async function handleCommand(command, params) {
         throw new Error("Missing nodeId parameter");
       }
       return await getNodeInfo(params.nodeId);
-    case "get_node_summary":
-      return await getNodeSummary(params && params.nodeId ? params.nodeId : undefined);
+    // case "get_node_summary":
+    //   return await getNodeSummary(params && params.nodeId ? params.nodeId : undefined);
     case "get_node_children_tree":
       if (!params || !params.nodeId) {
         throw new Error("Missing nodeId parameter");
@@ -160,6 +160,8 @@ async function handleCommand(command, params) {
       return await setColorStyle(params);
     case "set_color_variable":
       return await setColorVariable(params);
+    case "set_variable_mode":
+      return await setVariableMode(params);
     case "set_effects":
       return await setEffects(params);
     case "move_node":
@@ -1757,12 +1759,17 @@ async function setColorVariable(params) {
     variable
   );
   node[property] = nextPaints;
+  const updatedPaint = node[property][paintIndex];
 
   return {
     id: node.id,
     name: node.name,
     property,
     paintIndex,
+    paint: makeJsonSafe(updatedPaint),
+    boundVariables: updatedPaint && updatedPaint.boundVariables
+      ? makeJsonSafe(updatedPaint.boundVariables)
+      : {},
     variableId: variable.id,
     variableName: variable.name,
     variableKey: variable.key,
@@ -2249,6 +2256,108 @@ async function getStyles() {
   };
 }
 
+async function resolveLocalVariableCollection({ collectionId, collectionName }) {
+  if (!figma.variables || typeof figma.variables.getLocalVariableCollectionsAsync !== "function") {
+    throw new Error("This Figma version does not support local variable collections");
+  }
+
+  const collections = await figma.variables.getLocalVariableCollectionsAsync();
+
+  if (collectionId) {
+    const collection = collections.find((candidate) => candidate.id === collectionId);
+    if (!collection) {
+      throw new Error(`Variable collection not found with ID: ${collectionId}`);
+    }
+    return collection;
+  }
+
+  if (!collectionName) {
+    throw new Error("Missing collectionId or collectionName parameter");
+  }
+
+  const matches = collections.filter((collection) => collection.name === collectionName);
+  if (matches.length === 0) {
+    throw new Error(`Variable collection not found with name: ${collectionName}`);
+  }
+  if (matches.length > 1) {
+    throw new Error(`Multiple variable collections found with name: ${collectionName}. Use collectionId instead.`);
+  }
+
+  return matches[0];
+}
+
+async function setVariableMode(params) {
+  const {
+    nodeId,
+    pageId,
+    target = nodeId ? "node" : "current_page",
+    collectionId,
+    collectionName,
+    modeId,
+    modeName,
+  } = params || {};
+
+  if (!modeId && !modeName) {
+    throw new Error("Missing modeId or modeName parameter");
+  }
+
+  let node;
+  if (target === "current_page") {
+    node = figma.currentPage;
+  } else if (target === "page") {
+    const resolvedPageId = pageId || nodeId;
+    if (!resolvedPageId) {
+      throw new Error("Missing pageId parameter");
+    }
+    node = await figma.getNodeByIdAsync(resolvedPageId);
+    if (!node) {
+      throw new Error(`Page not found with ID: ${resolvedPageId}`);
+    }
+    if (node.type !== "PAGE") {
+      throw new Error(`Target is not a page: ${resolvedPageId}`);
+    }
+  } else if (target === "node") {
+    if (!nodeId) {
+      throw new Error("Missing nodeId parameter");
+    }
+    node = await figma.getNodeByIdAsync(nodeId);
+    if (!node) {
+      throw new Error(`Node not found with ID: ${nodeId}`);
+    }
+  } else {
+    throw new Error("target must be one of: node, page, current_page");
+  }
+
+  if (typeof node.setExplicitVariableModeForCollection !== "function") {
+    throw new Error(`Target does not support explicit variable modes: ${node.id}`);
+  }
+
+  const collection = await resolveLocalVariableCollection({ collectionId, collectionName });
+  const mode = modeId
+    ? collection.modes.find((candidate) => candidate.modeId === modeId)
+    : collection.modes.find((candidate) => candidate.name === modeName);
+
+  if (!mode) {
+    const requested = modeId ? `ID: ${modeId}` : `name: ${modeName}`;
+    throw new Error(`Mode not found in collection "${collection.name}" with ${requested}`);
+  }
+
+  node.setExplicitVariableModeForCollection(collection, mode.modeId);
+
+  return {
+    id: node.id,
+    name: node.name,
+    type: node.type,
+    target,
+    collectionId: collection.id,
+    collectionName: collection.name,
+    modeId: mode.modeId,
+    modeName: mode.name,
+    explicitVariableModes: makeJsonSafe(node.explicitVariableModes || {}),
+    resolvedVariableModes: makeJsonSafe(node.resolvedVariableModes || {}),
+  };
+}
+
 function summarizeVariableValue(value) {
   if (value && typeof value === "object" && "r" in value && "g" in value && "b" in value) {
     return {
@@ -2637,8 +2746,8 @@ async function findColorResources(params) {
     nodeId,
     "Select exactly one node or provide nodeId"
   );
-  const summaryTree = await getNodeInfoFull(rootNode.id);
   const styleCache = new Map();
+  const variableCache = new Map();
   const resources = [];
   const seenKeys = new Set();
 
@@ -2667,7 +2776,7 @@ async function findColorResources(params) {
   }
 
   async function getStyleInfo(styleId) {
-    if (!styleId) {
+    if (!styleId || typeof styleId !== "string") {
       return undefined;
     }
 
@@ -2707,6 +2816,20 @@ async function findColorResources(params) {
     return kinds;
   }
 
+  function colorToResourceValue(color) {
+    return color ? rgbaToHex(color) : undefined;
+  }
+
+  async function cloneAndEnrich(value) {
+    if (!value) {
+      return undefined;
+    }
+
+    const cloned = makeJsonSafe(value);
+    await enrichVariableAliasesInPlace(cloned, variableCache);
+    return cloned;
+  }
+
   async function inspectPaints(node, path, property, paints, styleId) {
     if (!Array.isArray(paints)) {
       return;
@@ -2720,8 +2843,8 @@ async function findColorResources(params) {
         continue;
       }
 
-      const boundVariables = paint.boundVariables;
-      const resolvedColor = paint.color;
+      const boundVariables = await cloneAndEnrich(paint.boundVariables);
+      const resolvedColor = colorToResourceValue(paint.color);
       const resourceKinds = classifyResourceKinds(styleInfo, boundVariables, resolvedColor);
 
       if (resourceKinds.length > 0) {
@@ -2744,8 +2867,8 @@ async function findColorResources(params) {
       if (Array.isArray(paint.gradientStops)) {
         for (let stopIndex = 0; stopIndex < paint.gradientStops.length; stopIndex += 1) {
           const stop = paint.gradientStops[stopIndex];
-          const stopBoundVariables = stop.boundVariables;
-          const stopResolvedColor = stop.color;
+          const stopBoundVariables = await cloneAndEnrich(stop.boundVariables);
+          const stopResolvedColor = colorToResourceValue(stop.color);
           const stopKinds = classifyResourceKinds(undefined, stopBoundVariables, stopResolvedColor);
 
           if (stopKinds.length === 0) {
@@ -2792,18 +2915,20 @@ async function findColorResources(params) {
         effectType: effect.type,
         visible: effect.visible !== false,
         resourceKinds: ["hardcoded"],
-        resolvedColor: effect.color,
+        resolvedColor: colorToResourceValue(effect.color),
       });
     }
   }
 
-  async function visitSummaryNode(node, path) {
+  async function visitNode(node, path) {
     if (!node) {
       return;
     }
 
     const nodePath = buildPath(path, node);
-    const nodeBoundVariables = node.boundVariables;
+    const nodeBoundVariables = await cloneAndEnrich(
+      "boundVariables" in node ? node.boundVariables : undefined
+    );
 
     if (nodeBoundVariables && Object.keys(nodeBoundVariables).length > 0) {
       pushUniqueResource({
@@ -2817,24 +2942,24 @@ async function findColorResources(params) {
       });
     }
 
-    if (Array.isArray(node.fills)) {
+    if ("fills" in node && node.fills !== figma.mixed && Array.isArray(node.fills)) {
       await inspectPaints(node, nodePath, "fills", node.fills, node.fillStyleId);
     }
 
-    if (Array.isArray(node.strokes)) {
+    if ("strokes" in node && node.strokes !== figma.mixed && Array.isArray(node.strokes)) {
       await inspectPaints(node, nodePath, "strokes", node.strokes, node.strokeStyleId);
     }
 
-    if (Array.isArray(node.effects)) {
+    if ("effects" in node && Array.isArray(node.effects)) {
       await inspectEffects(node, nodePath, node.effects);
     }
 
-    if (Array.isArray(node.children) && node.children.length > 0) {
-      await Promise.all(node.children.map((child) => visitSummaryNode(child, nodePath)));
+    if ("children" in node && Array.isArray(node.children) && node.children.length > 0) {
+      await Promise.all(node.children.map((child) => visitNode(child, nodePath)));
     }
   }
 
-  await visitSummaryNode(summaryTree, []);
+  await visitNode(rootNode, []);
 
   const summary = {
     variable: resources.filter((resource) => resource.resourceKinds.includes("variable")).length,

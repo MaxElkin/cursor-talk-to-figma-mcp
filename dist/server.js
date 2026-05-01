@@ -141,35 +141,6 @@ server.tool(
     }
   }
 );
-server.tool(
-  "get_node_summary",
-  "Get shallow information about a specific node in Figma without returning its children tree. If nodeId is omitted, uses the single currently selected node.",
-  {
-    nodeId: z.string().optional().describe("The ID of the node to get summary information about. If omitted, the single selected node is used.")
-  },
-  async ({ nodeId }) => {
-    try {
-      const result = await sendCommandToFigma("get_node_summary", nodeId ? { nodeId } : {});
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result)
-          }
-        ]
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error getting node summary: ${error instanceof Error ? error.message : String(error)}`
-          }
-        ]
-      };
-    }
-  }
-);
 function rgbaToHex(color) {
   if (color.startsWith("#")) {
     return color;
@@ -611,7 +582,16 @@ server.tool(
         content: [
           {
             type: "text",
-            text: `Bound ${typedResult.property}[${typedResult.paintIndex}] of node "${typedResult.name}" to color variable "${typedResult.variableName}" (${typedResult.variableId})`
+            text: JSON.stringify({
+              message: `Bound ${typedResult.property}[${typedResult.paintIndex}] of node "${typedResult.name}" to color variable "${typedResult.variableName}" (${typedResult.variableId})`,
+              name: typedResult.name,
+              property: typedResult.property,
+              paintIndex: typedResult.paintIndex,
+              variableName: typedResult.variableName,
+              variableId: typedResult.variableId,
+              boundVariables: typedResult.boundVariables || null,
+              paint: typedResult.paint || null
+            })
           }
         ]
       };
@@ -621,6 +601,61 @@ server.tool(
           {
             type: "text",
             text: `Error setting color variable: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
+  "set_variable_mode",
+  "Set an explicit variable mode for a local variable collection on a node or page",
+  {
+    nodeId: z.string().optional().describe("The ID of the node to modify. Required when target is node. Can also identify a page when target is page and pageId is omitted."),
+    pageId: z.string().optional().describe("The ID of the page to modify when target is page."),
+    target: z.enum(["node", "page", "current_page"]).optional().describe("Where to apply the variable mode. Defaults to node when nodeId is provided, otherwise current_page."),
+    collectionId: z.string().optional().describe("The local variable collection ID. Used instead of collectionName when provided."),
+    collectionName: z.string().optional().describe("The local variable collection name, for example M3. Used when collectionId is not provided."),
+    modeId: z.string().optional().describe("The variable collection mode ID. Used instead of modeName when provided."),
+    modeName: z.string().optional().describe("The variable collection mode name, for example Light or Dark. Used when modeId is not provided.")
+  },
+  async ({ nodeId, pageId, target, collectionId, collectionName, modeId, modeName }) => {
+    try {
+      const result = await sendCommandToFigma("set_variable_mode", {
+        nodeId,
+        pageId,
+        target,
+        collectionId,
+        collectionName,
+        modeId,
+        modeName
+      });
+      const typedResult = result;
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              message: `Set variable mode for collection "${typedResult.collectionName}" on node "${typedResult.name}" to "${typedResult.modeName}" (${typedResult.modeId})`,
+              name: typedResult.name,
+              type: typedResult.type || null,
+              target: typedResult.target || null,
+              collectionName: typedResult.collectionName,
+              collectionId: typedResult.collectionId,
+              modeName: typedResult.modeName,
+              modeId: typedResult.modeId,
+              explicitVariableModes: typedResult.explicitVariableModes || null,
+              resolvedVariableModes: typedResult.resolvedVariableModes || null
+            })
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error setting variable mode: ${error instanceof Error ? error.message : String(error)}`
           }
         ]
       };
