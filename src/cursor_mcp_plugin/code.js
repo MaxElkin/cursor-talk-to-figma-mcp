@@ -202,6 +202,8 @@ async function handleCommand(command, params) {
       return await exportNodeAsImage(params);
     case "set_corner_radius":
       return await setCornerRadius(params);
+    case "rename_node":
+      return await renameNode(params);
     case "set_text_content":
       return await setTextContent(params);
     case "clone_node":
@@ -263,6 +265,10 @@ async function handleCommand(command, params) {
           throw new Error("Missing sourceInstanceId parameter");
         }
       }
+    case "set_instance_properties":
+      return await setInstanceProperties(params);
+    case "reset_instance_overrides":
+      return await resetInstanceOverrides(params);
     case "set_layout_mode":
       return await setLayoutMode(params);
     case "set_padding":
@@ -1833,7 +1839,7 @@ async function setEffects(params) {
 }
 
 async function moveNode(params) {
-  const { nodeId, x, y } = params || {};
+  const { nodeId, x, y, coordinateSpace = "local" } = params || {};
 
   if (!nodeId) {
     throw new Error("Missing nodeId parameter");
@@ -1852,14 +1858,30 @@ async function moveNode(params) {
     throw new Error(`Node does not support position: ${nodeId}`);
   }
 
-  node.x = x;
-  node.y = y;
+  if (coordinateSpace !== "local" && coordinateSpace !== "absolute") {
+    throw new Error("coordinateSpace must be either 'local' or 'absolute'");
+  }
+
+  if (coordinateSpace === "absolute") {
+    const parentBox = node.parent && "absoluteBoundingBox" in node.parent
+      ? node.parent.absoluteBoundingBox
+      : null;
+
+    node.x = parentBox ? x - parentBox.x : x;
+    node.y = parentBox ? y - parentBox.y : y;
+  } else {
+    node.x = x;
+    node.y = y;
+  }
 
   return {
     id: node.id,
     name: node.name,
     x: node.x,
     y: node.y,
+    coordinateSpace,
+    absoluteX: "absoluteBoundingBox" in node ? node.absoluteBoundingBox.x : undefined,
+    absoluteY: "absoluteBoundingBox" in node ? node.absoluteBoundingBox.y : undefined,
   };
 }
 
@@ -3469,6 +3491,30 @@ async function setTextContent(params) {
   }
 }
 
+async function renameNode(params) {
+  const { nodeId, name } = params || {};
+
+  if (!nodeId) {
+    throw new Error("Missing nodeId parameter");
+  }
+
+  if (name === undefined) {
+    throw new Error("Missing name parameter");
+  }
+
+  const node = await figma.getNodeByIdAsync(nodeId);
+  if (!node) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+
+  node.name = name;
+
+  return {
+    id: node.id,
+    name: node.name,
+  };
+}
+
 // Initialize settings on load
 (async function initializePlugin() {
   try {
@@ -3750,7 +3796,7 @@ async function cloneNode(params) {
 }
 
 async function createVariant(params) {
-  const { sourceNodeId, name, x, y } = params || {};
+  const { sourceNodeId, name, x, y, coordinateSpace = "local" } = params || {};
 
   if (!sourceNodeId) {
     throw new Error("Missing sourceNodeId parameter");
@@ -3758,6 +3804,10 @@ async function createVariant(params) {
 
   if (!name || typeof name !== "string") {
     throw new Error("Missing or invalid name parameter");
+  }
+
+  if (coordinateSpace !== "local" && coordinateSpace !== "absolute") {
+    throw new Error("coordinateSpace must be either 'local' or 'absolute'");
   }
 
   const sourceNode = await figma.getNodeByIdAsync(sourceNodeId);
@@ -3820,8 +3870,16 @@ async function createVariant(params) {
     Number.isFinite(existingBottom) ? Math.max(0, componentSet.height - existingBottom) : 0;
 
   if (x !== undefined && y !== undefined) {
-    clone.x = x;
-    clone.y = y;
+    if (coordinateSpace === "absolute") {
+      const parentBox = "absoluteBoundingBox" in componentSet
+        ? componentSet.absoluteBoundingBox
+        : null;
+      clone.x = parentBox ? x - parentBox.x : x;
+      clone.y = parentBox ? y - parentBox.y : y;
+    } else {
+      clone.x = x;
+      clone.y = y;
+    }
   } else {
     const siblingComponents = componentSet.children.filter(
       (child) => child.id !== clone.id && child.type === "COMPONENT"
@@ -3871,6 +3929,9 @@ async function createVariant(params) {
     y: clone.y,
     width: clone.width,
     height: clone.height,
+    coordinateSpace,
+    absoluteX: "absoluteBoundingBox" in clone ? clone.absoluteBoundingBox.x : undefined,
+    absoluteY: "absoluteBoundingBox" in clone ? clone.absoluteBoundingBox.y : undefined,
   };
 }
 
@@ -5501,6 +5562,109 @@ async function setInstanceOverrides(targetInstances, sourceResult) {
     figma.notify(message);
     return { success: false, message };
   }
+}
+
+async function setInstanceProperties(params) {
+  const { nodeId, properties } = params || {};
+
+  if (!nodeId) {
+    throw new Error("Missing nodeId parameter");
+  }
+
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) {
+    throw new Error("properties must be an object");
+  }
+
+  const node = await figma.getNodeByIdAsync(nodeId);
+  if (!node) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+
+  if (node.type !== "INSTANCE") {
+    throw new Error(`Node is not a component instance: ${nodeId}`);
+  }
+
+  node.setProperties(properties);
+
+  return {
+    id: node.id,
+    name: node.name,
+    componentProperties: node.componentProperties || {},
+  };
+}
+
+async function resetInstanceOverrides(params) {
+  const { nodeIds } = params || {};
+
+  if (!Array.isArray(nodeIds)) {
+    throw new Error("nodeIds must be an array");
+  }
+
+  if (nodeIds.length === 0) {
+    throw new Error("No instances provided");
+  }
+
+  const results = [];
+
+  for (const nodeId of nodeIds) {
+    try {
+      const node = await figma.getNodeByIdAsync(nodeId);
+      if (!node) {
+        results.push({
+          success: false,
+          instanceId: nodeId,
+          message: `Node not found with ID: ${nodeId}`,
+        });
+        continue;
+      }
+
+      if (node.type !== "INSTANCE") {
+        results.push({
+          success: false,
+          instanceId: node.id,
+          instanceName: node.name,
+          message: "Node is not a component instance",
+        });
+        continue;
+      }
+
+      if (typeof node.resetOverrides !== "function") {
+        results.push({
+          success: false,
+          instanceId: node.id,
+          instanceName: node.name,
+          message: "Figma API does not expose resetOverrides on this instance",
+        });
+        continue;
+      }
+
+      node.resetOverrides();
+
+      results.push({
+        success: true,
+        instanceId: node.id,
+        instanceName: node.name,
+      });
+    } catch (error) {
+      results.push({
+        success: false,
+        instanceId: nodeId,
+        message: `Error: ${error.message}`,
+      });
+    }
+  }
+
+  const successCount = results.filter((result) => result.success).length;
+  const message = `Reset overrides on ${successCount} of ${nodeIds.length} instances`;
+  figma.notify(message);
+
+  return {
+    success: successCount > 0,
+    message,
+    totalCount: nodeIds.length,
+    successCount,
+    results,
+  };
 }
 
 async function setLayoutMode(params) {

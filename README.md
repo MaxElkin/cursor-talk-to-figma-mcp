@@ -180,19 +180,23 @@ The MCP server provides the following tools for interacting with Figma:
 
 ### Layout & Organization
 
-- `move_node` - Move a node to a new position
+- `move_node` - Move a node to a new position using local parent coordinates by default, or absolute canvas coordinates with `coordinateSpace: "absolute"`
 - `resize_node` - Resize a node with new dimensions
 - `delete_node` - Delete a node
 - `delete_multiple_nodes` - Delete multiple nodes at once efficiently
 - `clone_node` - Create a copy of an existing node with optional position offset
+- `rename_node` - Rename an existing node
 
 ### Components & Styles
 
 - `get_styles` - Get information about local styles
 - `get_local_components` - Get information about local components
 - `create_component_instance` - Create an instance of a component
+- `create_variant` - Create a component variant; omitting `x/y` places it below existing variants, and provided coordinates are local by default or absolute with `coordinateSpace: "absolute"`
 - `get_instance_overrides` - Extract override properties from a selected component instance
 - `set_instance_overrides` - Apply extracted overrides to target instances
+- `set_instance_properties` - Set component properties on an instance, such as variant values or text properties
+- `reset_instance_overrides` - Reset component instances to match their source components
 
 ### Export & Advanced
 

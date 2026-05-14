@@ -713,21 +713,22 @@ server.tool(
 );
 server.tool(
   "move_node",
-  "Move a node to a new position in Figma",
+  "Move a node to a new position in Figma. Coordinates are local to the parent by default; use coordinateSpace='absolute' for canvas coordinates.",
   {
     nodeId: z.string().describe("The ID of the node to move"),
     x: z.number().describe("New X position"),
-    y: z.number().describe("New Y position")
+    y: z.number().describe("New Y position"),
+    coordinateSpace: z.enum(["local", "absolute"]).optional().describe("Coordinate space for x/y. Defaults to local parent coordinates. Use absolute for canvas coordinates.")
   },
-  async ({ nodeId, x, y }) => {
+  async ({ nodeId, x, y, coordinateSpace }) => {
     try {
-      const result = await sendCommandToFigma("move_node", { nodeId, x, y });
+      const result = await sendCommandToFigma("move_node", { nodeId, x, y, coordinateSpace });
       const typedResult = result;
       return {
         content: [
           {
             type: "text",
-            text: `Moved node "${typedResult.name}" to position (${x}, ${y})`
+            text: `Moved node "${typedResult.name}" to ${coordinateSpace || "local"} position (${x}, ${y})${typedResult.absoluteX !== void 0 && typedResult.absoluteY !== void 0 ? `; absolute position is (${typedResult.absoluteX}, ${typedResult.absoluteY})` : ""}`
           }
         ]
       };
@@ -776,28 +777,61 @@ server.tool(
   }
 );
 server.tool(
+  "rename_node",
+  "Rename a node in Figma",
+  {
+    nodeId: z.string().describe("The ID of the node to rename"),
+    name: z.string().describe("The new node name")
+  },
+  async ({ nodeId, name }) => {
+    try {
+      const result = await sendCommandToFigma("rename_node", { nodeId, name });
+      const typedResult = result;
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Renamed node ${typedResult.id} to "${typedResult.name}"`
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error renaming node: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
   "create_variant",
-  "Create a new variant from an existing component. If the source component is already inside a component set, the variant is added there. If the source is a standalone component, a new component set is created from the source and the new variant.",
+  "Create a new variant from an existing component. If x/y are omitted, the variant is placed below existing variants. If x/y are provided, coordinates are local to the component set by default; use coordinateSpace='absolute' for canvas coordinates.",
   {
     sourceNodeId: z.string().describe("The ID of the source COMPONENT to clone"),
     name: z.string().describe("The full name for the new variant, for example 'Property 1=Hidden'"),
     x: z.number().optional().describe("Optional X position for the new variant"),
-    y: z.number().optional().describe("Optional Y position for the new variant")
+    y: z.number().optional().describe("Optional Y position for the new variant"),
+    coordinateSpace: z.enum(["local", "absolute"]).optional().describe("Coordinate space for x/y. Defaults to local component-set coordinates. Use absolute for canvas coordinates.")
   },
-  async ({ sourceNodeId, name, x, y }) => {
+  async ({ sourceNodeId, name, x, y, coordinateSpace }) => {
     try {
       const result = await sendCommandToFigma("create_variant", {
         sourceNodeId,
         name,
         x,
-        y
+        y,
+        coordinateSpace
       });
       const typedResult = result;
       return {
         content: [
           {
             type: "text",
-            text: `Created variant "${typedResult.name}" with new ID: ${typedResult.id}${typedResult.x !== void 0 && typedResult.y !== void 0 ? ` at position (${typedResult.x}, ${typedResult.y})` : ""}`
+            text: `Created variant "${typedResult.name}" with new ID: ${typedResult.id}${typedResult.x !== void 0 && typedResult.y !== void 0 ? ` at local position (${typedResult.x}, ${typedResult.y})` : ""}${typedResult.absoluteX !== void 0 && typedResult.absoluteY !== void 0 ? `; absolute position is (${typedResult.absoluteX}, ${typedResult.absoluteY})` : ""}`
           }
         ]
       };
@@ -1681,6 +1715,72 @@ server.tool(
           {
             type: "text",
             text: `Error setting instance overrides: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
+  "set_instance_properties",
+  "Set component properties on a component instance, such as variant values, text properties, booleans, or instance swaps.",
+  {
+    nodeId: z.string().describe("ID of the component instance"),
+    properties: z.record(z.any()).describe("Object mapping component property names to values")
+  },
+  async ({ nodeId, properties }) => {
+    try {
+      const result = await sendCommandToFigma("set_instance_properties", {
+        nodeId,
+        properties
+      });
+      const typedResult = result;
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Set instance properties on "${typedResult.name}" (${typedResult.id})`
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error setting instance properties: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+);
+server.tool(
+  "reset_instance_overrides",
+  "Reset one or more component instances so they match their source components.",
+  {
+    nodeIds: z.array(z.string()).describe("Array of component instance IDs to reset")
+  },
+  async ({ nodeIds }) => {
+    try {
+      const result = await sendCommandToFigma("reset_instance_overrides", {
+        nodeIds: nodeIds || []
+      });
+      const typedResult = result;
+      return {
+        content: [
+          {
+            type: "text",
+            text: typedResult.success ? `Successfully reset ${typedResult.successCount || 0} of ${typedResult.totalCount || 0} instances.` : `Failed to reset instance overrides: ${typedResult.message}`
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error resetting instance overrides: ${error instanceof Error ? error.message : String(error)}`
           }
         ]
       };

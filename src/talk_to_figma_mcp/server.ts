@@ -947,21 +947,22 @@ server.tool(
 // Move Node Tool
 server.tool(
   "move_node",
-  "Move a node to a new position in Figma",
+  "Move a node to a new position in Figma. Coordinates are local to the parent by default; use coordinateSpace='absolute' for canvas coordinates.",
   {
     nodeId: z.string().describe("The ID of the node to move"),
     x: z.number().describe("New X position"),
     y: z.number().describe("New Y position"),
+    coordinateSpace: z.enum(["local", "absolute"]).optional().describe("Coordinate space for x/y. Defaults to local parent coordinates. Use absolute for canvas coordinates."),
   },
-  async ({ nodeId, x, y }: any) => {
+  async ({ nodeId, x, y, coordinateSpace }: any) => {
     try {
-      const result = await sendCommandToFigma("move_node", { nodeId, x, y });
-      const typedResult = result as { name: string };
+      const result = await sendCommandToFigma("move_node", { nodeId, x, y, coordinateSpace });
+      const typedResult = result as { name: string; x?: number; y?: number; absoluteX?: number; absoluteY?: number };
       return {
         content: [
           {
             type: "text",
-            text: `Moved node "${typedResult.name}" to position (${x}, ${y})`,
+            text: `Moved node "${typedResult.name}" to ${coordinateSpace || "local"} position (${x}, ${y})${typedResult.absoluteX !== undefined && typedResult.absoluteY !== undefined ? `; absolute position is (${typedResult.absoluteX}, ${typedResult.absoluteY})` : ""}`,
           },
         ],
       };
@@ -1013,29 +1014,64 @@ server.tool(
   }
 );
 
+// Rename Node Tool
+server.tool(
+  "rename_node",
+  "Rename a node in Figma",
+  {
+    nodeId: z.string().describe("The ID of the node to rename"),
+    name: z.string().describe("The new node name"),
+  },
+  async ({ nodeId, name }: any) => {
+    try {
+      const result = await sendCommandToFigma("rename_node", { nodeId, name });
+      const typedResult = result as { id: string; name: string };
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Renamed node ${typedResult.id} to "${typedResult.name}"`,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error renaming node: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
 server.tool(
   "create_variant",
-  "Create a new variant from an existing component. If the source component is already inside a component set, the variant is added there. If the source is a standalone component, a new component set is created from the source and the new variant.",
+  "Create a new variant from an existing component. If x/y are omitted, the variant is placed below existing variants. If x/y are provided, coordinates are local to the component set by default; use coordinateSpace='absolute' for canvas coordinates.",
   {
     sourceNodeId: z.string().describe("The ID of the source COMPONENT to clone"),
     name: z.string().describe("The full name for the new variant, for example 'Property 1=Hidden'"),
     x: z.number().optional().describe("Optional X position for the new variant"),
     y: z.number().optional().describe("Optional Y position for the new variant"),
+    coordinateSpace: z.enum(["local", "absolute"]).optional().describe("Coordinate space for x/y. Defaults to local component-set coordinates. Use absolute for canvas coordinates."),
   },
-  async ({ sourceNodeId, name, x, y }: any) => {
+  async ({ sourceNodeId, name, x, y, coordinateSpace }: any) => {
     try {
       const result = await sendCommandToFigma("create_variant", {
         sourceNodeId,
         name,
         x,
         y,
+        coordinateSpace,
       });
-      const typedResult = result as { id: string; name: string; x?: number; y?: number };
+      const typedResult = result as { id: string; name: string; x?: number; y?: number; absoluteX?: number; absoluteY?: number };
       return {
         content: [
           {
             type: "text",
-            text: `Created variant "${typedResult.name}" with new ID: ${typedResult.id}${typedResult.x !== undefined && typedResult.y !== undefined ? ` at position (${typedResult.x}, ${typedResult.y})` : ""}`,
+            text: `Created variant "${typedResult.name}" with new ID: ${typedResult.id}${typedResult.x !== undefined && typedResult.y !== undefined ? ` at local position (${typedResult.x}, ${typedResult.y})` : ""}${typedResult.absoluteX !== undefined && typedResult.absoluteY !== undefined ? `; absolute position is (${typedResult.absoluteX}, ${typedResult.absoluteY})` : ""}`,
           },
         ],
       };
@@ -2052,6 +2088,85 @@ server.tool(
             text: `Error setting instance overrides: ${error instanceof Error ? error.message : String(error)}`
           }
         ]
+      };
+    }
+  }
+);
+
+// Set Instance Properties Tool
+server.tool(
+  "set_instance_properties",
+  "Set component properties on a component instance, such as variant values, text properties, booleans, or instance swaps.",
+  {
+    nodeId: z.string().describe("ID of the component instance"),
+    properties: z.record(z.any()).describe("Object mapping component property names to values"),
+  },
+  async ({ nodeId, properties }: any) => {
+    try {
+      const result = await sendCommandToFigma("set_instance_properties", {
+        nodeId,
+        properties,
+      });
+      const typedResult = result as { id: string; name: string };
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Set instance properties on "${typedResult.name}" (${typedResult.id})`,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error setting instance properties: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Reset Instance Overrides Tool
+server.tool(
+  "reset_instance_overrides",
+  "Reset one or more component instances so they match their source components.",
+  {
+    nodeIds: z.array(z.string()).describe("Array of component instance IDs to reset"),
+  },
+  async ({ nodeIds }: any) => {
+    try {
+      const result = await sendCommandToFigma("reset_instance_overrides", {
+        nodeIds: nodeIds || [],
+      });
+      const typedResult = result as {
+        success: boolean;
+        message: string;
+        totalCount?: number;
+        successCount?: number;
+      };
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: typedResult.success
+              ? `Successfully reset ${typedResult.successCount || 0} of ${typedResult.totalCount || 0} instances.`
+              : `Failed to reset instance overrides: ${typedResult.message}`,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error resetting instance overrides: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
       };
     }
   }
@@ -3417,10 +3532,13 @@ type FigmaCommand =
   | "create_component_instance"
   | "get_instance_overrides"
   | "set_instance_overrides"
+  | "set_instance_properties"
+  | "reset_instance_overrides"
   | "export_node_as_image"
   | "join"
   | "set_corner_radius"
   | "clone_node"
+  | "rename_node"
   | "create_variant"
   | "set_text_content"
   | "scan_text_nodes"
@@ -3531,6 +3649,7 @@ type CommandParams = {
     nodeId: string;
     x: number;
     y: number;
+    coordinateSpace?: "local" | "absolute";
   };
   resize_node: {
     nodeId: string;
@@ -3593,6 +3712,13 @@ type CommandParams = {
     targetNodeIds: string[];
     sourceInstanceId: string;
   };
+  set_instance_properties: {
+    nodeId: string;
+    properties: Record<string, unknown>;
+  };
+  reset_instance_overrides: {
+    nodeIds: string[];
+  };
   export_node_as_image: {
     nodeId: string;
     format?: "PNG" | "JPG" | "SVG" | "PDF";
@@ -3614,11 +3740,16 @@ type CommandParams = {
     x?: number;
     y?: number;
   };
+  rename_node: {
+    nodeId: string;
+    name: string;
+  };
   create_variant: {
     sourceNodeId: string;
     name: string;
     x?: number;
     y?: number;
+    coordinateSpace?: "local" | "absolute";
   };
   set_text_content: {
     nodeId: string;
